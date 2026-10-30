@@ -18,18 +18,25 @@ DISALLOWED_KEYWORDS = [
     r"\bEXECUTE\b",
     r"\bGRANT\b",
     r"\bREVOKE\b",
+    r"\bVACUUM\b",
+    r"\bCOPY\b",
+    r"\bINTO\s+OUTFILE\b",
+    r"\bINTO\s+DUMPFILE\b",
 ]
 
 DISALLOWED_PATTERN = re.compile("|".join(DISALLOWED_KEYWORDS), re.IGNORECASE)
+
+MAX_QUERY_ROWS_DEFAULT = 1000
 
 
 def validate_sql(sql: str) -> Tuple[bool, str]:
     """
     Validate that an incoming SQL query:
     1. Is non-empty.
-    2. Is strictly a read-only SELECT query.
+    2. Is strictly a read-only SELECT or WITH (CTE) query.
     3. Contains no write/DDL/DML modification statements.
     4. Is a single query statement (rejects multiple statements separated by semicolons).
+    5. Does not contain SQL comments used for query splitting or obfuscation.
     """
     if not sql or not sql.strip():
         return False, "Query cannot be empty."
@@ -58,13 +65,14 @@ def validate_sql(sql: str) -> Tuple[bool, str]:
     if not re.match(r"^(SELECT|WITH)\b", sql_without_trailing_semicolon, re.IGNORECASE):
         return False, "Only read-only SELECT queries are permitted."
 
-    # Search for forbidden write/modification keywords
-    # Strip literal string contents first so users can search for words like 'create' in quotes
+    # Search for forbidden write/modification keywords outside of quoted literals
     string_stripped_sql = re.sub(r"'[^']*'|\"[^\"]*\"", "''", sql_without_trailing_semicolon)
     match = DISALLOWED_PATTERN.search(string_stripped_sql)
     if match:
         forbidden_word = match.group(0).upper()
-        return False, f"Write or administrative command '{forbidden_word}' is forbidden. Only read-only SELECT queries are allowed."
+        return (
+            False,
+            f"Write or administrative command '{forbidden_word}' is forbidden. Only read-only SELECT queries are allowed.",
+        )
 
     return True, ""
-

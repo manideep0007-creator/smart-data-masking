@@ -33,16 +33,51 @@
       </div>
     </header>
 
+    <!-- JWT Authentication & Session Ribbon -->
+    <div class="auth-ribbon">
+      <div class="auth-persona-group">
+        <span style="color: var(--text-muted); font-weight: 500;">🔐 Verified JWT Persona:</span>
+        <button class="auth-pill-btn" data-user="admin_anita" data-pass="password123" data-role="Admin" title="Anita Sharma - Platform Admin">
+          👑 Admin (Anita)
+        </button>
+        <button class="auth-pill-btn active" data-user="support_ravi" data-pass="password123" data-role="Support" title="Ravi Kumar - Tier 2 Support">
+          🎧 Support (Ravi)
+        </button>
+        <button class="auth-pill-btn" data-user="analyst_kavya" data-pass="password123" data-role="Analyst" title="Kavya Iyer - Risk & BI Analyst">
+          📊 Analyst (Kavya)
+        </button>
+        <button id="demoModeBtn" class="auth-pill-btn" style="border-style: dashed;" title="Switch to unauthenticated demo mode">
+          🔓 Anonymous Demo
+        </button>
+      </div>
+      <div id="authStatusChip" class="auth-status-chip">
+        <span class="status-dot"></span>
+        <span id="authStatusLabel">JWT: support_ravi (SUPPORT)</span>
+      </div>
+    </div>
+
     <!-- Main Workspace -->
     <main class="console-grid">
       <!-- Left Column: Schema Scan & Policy Legend -->
       <section class="panel pii-panel">
         <div class="panel-header">
           <h2>🔍 PII Schema Radar</h2>
-          <button id="scanBtn" class="btn btn-secondary btn-sm">Scan Schema</button>
+          <div style="display: flex; gap: 0.4rem;">
+            <button id="bgScanBtn" class="btn btn-secondary btn-sm" title="Trigger background worker scan without blocking queries">Async Scan</button>
+            <button id="scanBtn" class="btn btn-secondary btn-sm">Scan Schema</button>
+          </div>
         </div>
         <p class="panel-desc">Real-time heuristic column detection & classification (<code>GET /scan</code>)</p>
         
+        <!-- Background Scan Progress Bar -->
+        <div id="bgScanBar" class="bg-scan-bar hidden">
+          <span id="bgScanLabel">Background scan running...</span>
+          <div class="progress-track">
+            <div id="bgScanProgress" class="progress-fill"></div>
+          </div>
+          <span id="bgScanPct" style="font-family: var(--font-mono); font-size: 0.7rem;">0%</span>
+        </div>
+
         <div id="scanStatus" class="info-alert">Click "Scan Schema" to inspect detected sensitive fields.</div>
         
         <div id="schemaBadgesList" class="badges-container">
@@ -61,7 +96,7 @@
           </div>
           <div class="legend-row">
             <span class="role-tag analyst">Analyst</span>
-            <span>Complete redaction of sensitive identifiers (<code>[REDACTED]</code>)</span>
+            <span>Complete redaction (<code>[REDACTED]</code>) or pseudonymized hash (<code>sha256:...</code>)</span>
           </div>
         </div>
       </section>
@@ -70,12 +105,24 @@
       <section class="panel query-panel">
         <div class="panel-header">
           <h2>⚡ Query Operations Gateway</h2>
-          <span class="badge-tag safe-mode">Read-Only Guard Active</span>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <span id="dbEngineBadge" class="badge-tag" style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.4); color: #60a5fa;">SQLite Read-Only</span>
+            <span class="badge-tag safe-mode">Read-Only Guard Active</span>
+          </div>
         </div>
 
         <!-- Role Selection -->
         <div class="role-bar">
-          <label class="section-label">Active Query Persona:</label>
+          <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <label class="section-label">Active Query Persona:</label>
+            <div class="strategy-selector">
+              <label for="maskStrategySelect">Analyst Masking Strategy:</label>
+              <select id="maskStrategySelect">
+                <option value="redact" selected>Full Redaction [REDACTED]</option>
+                <option value="hash">Deterministic Hash (sha256:12char)</option>
+              </select>
+            </div>
+          </div>
           <div class="role-radios">
             <label class="role-option">
               <input type="radio" name="userRole" value="Support" checked />
@@ -88,7 +135,7 @@
               <input type="radio" name="userRole" value="Analyst" />
               <span class="role-card analyst-card">
                 <strong>Analyst</strong>
-                <small>Fully Redacted</small>
+                <small>Fully Redacted / Hash</small>
               </span>
             </label>
             <label class="role-option">
@@ -156,4 +203,3 @@
   <script src="app.js"></script>
 </body>
 </html>
-

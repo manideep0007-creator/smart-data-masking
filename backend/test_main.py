@@ -193,3 +193,247 @@ def test_query_empty_sql():
     assert response.status_code == 400
     assert "Query cannot be empty" in response.json()["detail"]
 
+
+
+# =====================================================================
+# EXTENDED TEST SUITE: Database Abstraction, JWT, RBAC, Masking, Security
+# =====================================================================
+
+import time
+from backend.database import get_database_adapter, SQLiteAdapter, PostgreSQLAdapter
+from backend.auth import hash_password, verify_password, create_access_token, decode_access_token
+from backend.masker import mask_value_for_role, deterministic_hash
+from backend.detector import classify_column
+from backend.validator import validate_sql
+from backend.registry import registry
+from backend.scanner import background_scanner
+
+
+def test_sqlite_adapter_methods():
+    adapter = get_database_adapter("sqlite")
+    conn_info = adapter.test_connection()
+    assert conn_info["status"] == "connected"
+    assert conn_info["engine"] == "sqlite"
+
+    tables = adapter.get_tables()
+    assert "customers" in tables
+
+    columns = adapter.get_table_columns("customers")
+    assert "card_number" in columns
+    assert "name" in columns
+
+    samples = adapter.get_sample_rows("customers", limit=2)
+    assert len(samples) == 2
+
+    cols, rows, meta = adapter.execute_read_query("SELECT id, name FROM customers LIMIT 2")
+    assert cols == ["id", "name"]
+    assert len(rows) == 2
+    assert "execution_ms" in meta
+
+
+def test_sqlite_adapter_enforces_read_only():
+    adapter = get_database_adapter("sqlite")
+    with pytest.raises(sqlite3.DatabaseError):
+        adapter.execute_read_query("UPDATE customers SET name = 'Hacked'")
+
+
+def test_postgres_adapter_initialization_and_mock_fallback():
+    # Test PostgreSQLAdapter instantiation and connection test error handling
+    pg_adapter = PostgreSQLAdapter(
+        host="127.0.0.1", port=5432, dbname="nonexistent_db", user="test", password="wrong"
+    )
+    res = pg_adapter.test_connection()
+    assert res["engine"] == "postgresql"
+    assert res["status"] in ("connected", "error")
+
+
+def test_password_hashing_and_verification():
+    raw_pass = "SecurePass2026!"
+    hashed = hash_password(raw_pass)
+    assert hashed != raw_pass
+    assert verify_password(raw_pass, hashed) is True
+    assert verify_password("WrongPass", hashed) is False
+
+
+def test_jwt_token_creation_and_validation():
+    data = {"sub": "analyst_kavya", "role": "Analyst", "full_name": "Kavya Iyer"}
+    token = create_access_token(data)
+    assert isinstance(token, str)
+
+    payload = decode_access_token(token)
+    assert payload["sub"] == "analyst_kavya"
+    assert payload["role"] == "Analyst"
+    assert payload["full_name"] == "Kavya Iyer"
+
+
+def test_auth_login_successful():
+    response = client.post("/auth/login", json={"username": "admin_anita", "password": "password123"})
+    assert response.status_code == 200
+    data = response.json()
+    assert "access_token" in data
+    assert data["token_type"] == "bearer"
+    assert data["user"]["role"] == "Admin"
+    assert data["user"]["username"] == "admin_anita"
+
+
+def test_auth_login_invalid_password():
+    response = client.post("/auth/login", json={"username": "admin_anita", "password": "wrongpassword"})
+    assert response.status_code == 401
+    assert "Invalid username or password" in response.json()["detail"]
+
+
+def test_auth_me_endpoint_with_valid_token():
+    # Login to get token
+    login_resp = client.post("/auth/login", json={"username": "support_ravi", "password": "password123"})
+    token = login_resp.json()["access_token"]
+
+    response = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    profile = response.json()
+    assert profile["username"] == "support_ravi"
+    assert profile["role"] == "Support"
+
+
+def test_auth_me_missing_token_rejected():
+    response = client.get("/auth/me")
+    assert response.status_code == 401
+
+
+def test_auth_users_list_endpoint():
+    response = client.get("/auth/users")
+    assert response.status_code == 200
+    data = response.json()
+    assert "users" in data
+    usernames = [u["username"] for u in data["users"]]
+    assert "admin_anita" in usernames
+    assert "support_ravi" in usernames
+    assert "analyst_kavya" in usernames
+
+
+def test_server_side_rbac_overrides_frontend_role_tampering():
+    """
+    CRITICAL SECURITY TEST:
+    If a user is logged in as Analyst, but attempts to submit 'role': 'Admin'
+    in the JSON body, the gateway MUST derive the role from the verified JWT
+    and enforce Analyst redaction.
+    """
+    # 1. Obtain Analyst token
+    login_resp = client.post("/auth/login", json={"username": "analyst_kavya", "password": "password123"})
+    analyst_token = login_resp.json()["access_token"]
+
+    # 2. Submit query with fake 'Admin' role in JSON payload
+    response = client.post(
+        "/query",
+        json={"role": "Admin", "sql": "SELECT name, card_number FROM customers WHERE name = 'Asha'"},
+        headers={"Authorization": f"Bearer {analyst_token}"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    # The result MUST BE REDACTED because token is Analyst
+    assert data["rows"][0] == ["[REDACTED]", "[REDACTED]"]
+    assert data["meta"]["role_applied"] == "Analyst"
+    assert data["meta"]["auth_source"] == "jwt_verified"
+
+
+def test_analyst_deterministic_hashing_strategy():
+    response = client.post(
+        "/query",
+        json={
+            "role": "Analyst",
+            "sql": "SELECT name, card_number FROM customers WHERE name = 'Asha'",
+            "mask_strategy": "hash",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    card_hash = data["rows"][0][1]
+    assert card_hash.startswith("sha256:")
+    assert len(card_hash) > 10
+
+    # Repeatability test: same input with same salt produces same hash
+    repeat_response = client.post(
+        "/query",
+        json={
+            "role": "Analyst",
+            "sql": "SELECT name, card_number FROM customers WHERE name = 'Asha'",
+            "mask_strategy": "hash",
+        },
+    )
+    assert repeat_response.json()["rows"][0][1] == card_hash
+
+
+def test_indian_pii_aadhaar_pan_detection_and_masking():
+    # Test Aadhaar detection
+    res_aadhaar = classify_column("aadhaar_no", ["1234-5678-9012"])
+    assert res_aadhaar["tag"] == "PII_HIGH"
+    assert res_aadhaar["pii_type"] == "AADHAAR"
+
+    # Test PAN detection
+    res_pan = classify_column("pan_no", ["ABCDE1234F"])
+    assert res_pan["tag"] == "PII_HIGH"
+    assert res_pan["pii_type"] == "PAN"
+
+    # Test Support masking
+    masked_aadhaar = mask_value_for_role("Support", res_aadhaar, "1234-5678-9012")
+    assert masked_aadhaar == "XXXX-XXXX-9012"
+
+    masked_pan = mask_value_for_role("Support", res_pan, "ABCDE1234F")
+    assert masked_pan == "XXXXX1234F"
+
+
+def test_background_scanner_and_history():
+    # Trigger scan
+    start_resp = client.post("/scan/start")
+    assert start_resp.status_code == 200
+    assert "task_id" in start_resp.json()
+
+    # Wait briefly for thread execution
+    time.sleep(0.3)
+
+    status_resp = client.get("/scan/status")
+    assert status_resp.status_code == 200
+    assert status_resp.json()["status"] in ("scanning", "completed")
+
+    history_resp = client.get("/scan/history")
+    assert history_resp.status_code == 200
+    assert "history" in history_resp.json()
+
+
+def test_database_info_endpoint():
+    response = client.get("/database/info")
+    assert response.status_code == 200
+    data = response.json()
+    assert "connection" in data
+    assert data["connection"]["engine"] == "sqlite"
+    assert "customers" in data["tables"]
+
+
+def test_sql_validator_rejects_comments():
+    q1 = "SELECT * FROM customers -- ignore rest"
+    is_valid, err = validate_sql(q1)
+    assert is_valid is False
+    assert "SQL comments are not permitted" in err
+
+    q2 = "SELECT /* secret comment */ name FROM customers"
+    is_valid, err = validate_sql(q2)
+    assert is_valid is False
+    assert "SQL comments are not permitted" in err
+
+
+def test_sql_validator_allows_safe_cte():
+    cte = "WITH high_earners AS (SELECT name, salary FROM customers WHERE salary > 90000) SELECT name FROM high_earners"
+    is_valid, err = validate_sql(cte)
+    assert is_valid is True
+    assert err == ""
+
+
+def test_query_max_rows_limiting():
+    response = client.post(
+        "/query",
+        json={"role": "Admin", "sql": "SELECT id, name FROM customers", "max_rows": 2},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["rows"]) == 2
+    assert data["meta"]["truncated"] is True
