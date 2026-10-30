@@ -118,3 +118,4 @@ Follow this 5-minute evaluation script to demonstrate all system capabilities to
 | `psycopg driver is not installed` | Missing PostgreSQL client driver | Run `pip install psycopg[binary]` |
 | `fatal: not a git repository` | Command executed in parent folder | Ensure terminal is in `D:\Innovex\smart-data-masking` |
 | Port 8000 already in use | Stale process holding port | In PowerShell: `Get-Process -Id (Get-NetTCPConnection -LocalPort 8000).OwningProcess \| Stop-Process -Force` |
+

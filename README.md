@@ -118,3 +118,4 @@ python -m http.server 3000 --directory frontend
 4. **Keyword Interception**: Strict detection of `DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`, `CREATE`, `TRUNCATE`, `ATTACH`, `PRAGMA`.
 5. **Driver-Level Enforcement**: SQLite `set_authorizer` and PostgreSQL `default_transaction_read_only = ON` guarantee write commands fail even if parsing were bypassed.
 6. **Bounded Resource Pagination**: Maximum row limiter (`max_rows=1000`) prevents runaway memory consumption.
+
