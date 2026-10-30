@@ -685,3 +685,4 @@ with open("e2e_results.json", "w", encoding="utf-8") as f:
 passed_count = sum(1 for r in results_log if r["status"] == "PASS")
 failed_count = sum(1 for r in results_log if r["status"] == "FAIL")
 print(f"[+] Total E2E Tests Executed: {len(results_log)} | Passed: {passed_count} | Failed: {failed_count}")
+
