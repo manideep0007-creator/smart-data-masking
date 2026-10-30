@@ -56,48 +56,78 @@
 
     <!-- Main Workspace -->
     <main class="console-grid">
-      <!-- Left Column: Schema Scan & Policy Legend -->
-      <section class="panel pii-panel">
-        <div class="panel-header">
-          <h2>🔍 PII Schema Radar</h2>
-          <div style="display: flex; gap: 0.4rem;">
-            <button id="bgScanBtn" class="btn btn-secondary btn-sm" title="Trigger background worker scan without blocking queries">Async Scan</button>
-            <button id="scanBtn" class="btn btn-secondary btn-sm">Scan Schema</button>
+      <!-- Left Sidebar: Saffron Bank Database Explorer & PII Schema Radar -->
+      <aside class="left-sidebar">
+        <!-- Database Explorer Panel -->
+        <section class="panel db-explorer-panel">
+          <div class="panel-header">
+            <h2>🏦 Database Explorer</h2>
+            <span id="dbConnStatusBadge" class="badge-tag safe-mode">Connected</span>
           </div>
-        </div>
-        <p class="panel-desc">Real-time heuristic column detection & classification (<code>GET /scan</code>)</p>
-        
-        <!-- Background Scan Progress Bar -->
-        <div id="bgScanBar" class="bg-scan-bar hidden">
-          <span id="bgScanLabel">Background scan running...</span>
-          <div class="progress-track">
-            <div id="bgScanProgress" class="progress-fill"></div>
+          <p class="panel-desc">Saffron Bank SQLite schema & live record counts (<code>GET /database/info</code>)</p>
+          <div id="dbExplorerList" class="db-table-grid">
+            <div style="font-size: 0.8rem; color: var(--text-muted); padding: 0.5rem;">Loading database tables...</div>
           </div>
-          <span id="bgScanPct" style="font-family: var(--font-mono); font-size: 0.7rem;">0%</span>
-        </div>
+        </section>
 
-        <div id="scanStatus" class="info-alert">Click "Scan Schema" to inspect detected sensitive fields.</div>
-        
-        <div id="schemaBadgesList" class="badges-container">
-          <!-- Dynamically populated schema tags -->
-        </div>
+        <!-- Schema Scan & Policy Legend Panel -->
+        <section class="panel pii-panel">
+          <div class="panel-header">
+            <h2>🔍 PII Schema Radar</h2>
+            <div style="display: flex; gap: 0.4rem;">
+              <button id="bgScanBtn" class="btn btn-secondary btn-sm" title="Trigger background worker scan without blocking queries">Async Scan</button>
+              <button id="scanBtn" class="btn btn-secondary btn-sm">Scan Table</button>
+            </div>
+          </div>
+          <p class="panel-desc">Real-time heuristic column detection & classification (<code>GET /scan</code>)</p>
 
-        <div class="policy-legend">
-          <h3>🛡️ Role Policy Matrix</h3>
-          <div class="legend-row">
-            <span class="role-tag admin">Admin</span>
-            <span>Full unmasked access (raw database values)</span>
+          <div class="table-selector-row">
+            <label for="tableScanSelect">Target Table:</label>
+            <select id="tableScanSelect" class="table-select">
+              <option value="customers" selected>customers</option>
+              <option value="accounts">accounts</option>
+              <option value="cards">cards</option>
+              <option value="kyc_records">kyc_records</option>
+              <option value="international_customers">international_customers</option>
+              <option value="transactions">transactions</option>
+              <option value="branches">branches</option>
+              <option value="support_tickets">support_tickets</option>
+              <option value="loan_applications">loan_applications</option>
+            </select>
           </div>
-          <div class="legend-row">
-            <span class="role-tag support">Support</span>
-            <span>Targeted partial masking (<code>4111-XXXX-XXXX-1111</code>, names preserved)</span>
+          
+          <!-- Background Scan Progress Bar -->
+          <div id="bgScanBar" class="bg-scan-bar hidden">
+            <span id="bgScanLabel">Background scan running...</span>
+            <div class="progress-track">
+              <div id="bgScanProgress" class="progress-fill"></div>
+            </div>
+            <span id="bgScanPct" style="font-family: var(--font-mono); font-size: 0.7rem;">0%</span>
           </div>
-          <div class="legend-row">
-            <span class="role-tag analyst">Analyst</span>
-            <span>Complete redaction (<code>[REDACTED]</code>) or pseudonymized hash (<code>sha256:...</code>)</span>
+
+          <div id="scanStatus" class="info-alert">Click "Scan Table" to inspect detected sensitive fields.</div>
+          
+          <div id="schemaBadgesList" class="badges-container">
+            <!-- Dynamically populated schema tags -->
           </div>
-        </div>
-      </section>
+
+          <div class="policy-legend">
+            <h3>🛡️ Role Policy Matrix</h3>
+            <div class="legend-row">
+              <span class="role-tag admin">Admin</span>
+              <span>Full unmasked access (raw database values)</span>
+            </div>
+            <div class="legend-row">
+              <span class="role-tag support">Support</span>
+              <span>Targeted partial masking (<code>4111-XXXX-XXXX-1111</code>, names preserved)</span>
+            </div>
+            <div class="legend-row">
+              <span class="role-tag analyst">Analyst</span>
+              <span>Complete redaction (<code>[REDACTED]</code>) or pseudonymized hash (<code>sha256:...</code>)</span>
+            </div>
+          </div>
+        </section>
+      </aside>
 
       <!-- Right Column: Query Operations Console & Results -->
       <section class="panel query-panel">
@@ -151,14 +181,19 @@
           <div class="editor-header">
             <span class="section-label">SQL Query (Single Read-Only SELECT)</span>
             <div class="template-chips">
-              <span class="chip-label">Quick Templates:</span>
-              <button class="chip" data-sql="SELECT name, card_number FROM customers">Default Cards</button>
-              <button class="chip" data-sql="SELECT id, name, card_number, ssn, email, salary FROM customers">Full PII Profile</button>
+              <span class="chip-label">Saffron Bank Templates:</span>
+              <button class="chip" data-sql="SELECT c.customer_id, c.cust_nm, c.mob_no, c.emailid, a.account_no, a.acct_type, a.curr_bal FROM customers c JOIN accounts a ON c.customer_id = a.customer_id LIMIT 10">Customers & Accounts</button>
+              <button class="chip" data-sql="SELECT crd.CARD_NO, crd.NAME_ON_CARD, crd.CARD_NETWORK, crd.CARD_TYPE, crd.CREDIT_LIMIT, c.cust_nm, c.mob_no FROM cards crd JOIN customers c ON crd.CUSTOMER_ID = c.customer_id LIMIT 10">Cards & Cardholders</button>
+              <button class="chip" data-sql="SELECT kyc_id, customer_id, pan_no, aadhaar_no, kyc_status, kyc_meta FROM kyc_records LIMIT 10">KYC Records</button>
+              <button class="chip" data-sql="SELECT txn_id, txn_ts, account_no, dr_cr, amount_inr, bal_after, channel, counterparty, txn_status FROM transactions LIMIT 10">Transactions</button>
+              <button class="chip" data-sql="SELECT ticket_id, customer_id, channel, priority, status, assigned_to, ticket_text, notes FROM support_tickets LIMIT 10">Support Tickets</button>
+              <button class="chip" data-sql="SELECT app_id, customer_id, loan_type, employer_nm, declared_income_inr, credit_score, col_7, remarks FROM loan_applications LIMIT 10">Loan Applications</button>
+              <button class="chip" data-sql="SELECT branch_code, branch_nm, ifsc, branch_phone, branch_email, city, state, pincode FROM branches LIMIT 10">Branch Directory</button>
               <button class="chip chip-danger" data-sql="DROP TABLE customers">Test Write Rejection</button>
-              <button class="chip chip-danger" data-sql="SELECT name FROM customers; DROP TABLE customers">Test Injection</button>
+              <button class="chip chip-danger" data-sql="SELECT cust_nm FROM customers; DROP TABLE customers">Test Injection</button>
             </div>
           </div>
-          <textarea id="sqlInput" class="sql-textarea" rows="4" spellcheck="false">SELECT name, card_number FROM customers</textarea>
+          <textarea id="sqlInput" class="sql-textarea" rows="4" spellcheck="false">SELECT c.customer_id, c.cust_nm, c.mob_no, c.emailid, a.account_no, a.acct_type, a.curr_bal FROM customers c JOIN accounts a ON c.customer_id = a.customer_id LIMIT 10</textarea>
           
           <div class="editor-actions">
             <button id="runBtn" class="btn btn-primary">

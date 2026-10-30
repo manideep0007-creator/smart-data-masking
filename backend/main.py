@@ -235,14 +235,28 @@ def database_info():
     adapter = get_database_adapter()
     status_info = adapter.test_connection()
     tables = []
+    table_details = []
     if status_info.get("status") == "connected":
         try:
             tables = adapter.get_tables()
+            for t in tables:
+                cols = adapter.get_table_columns(t)
+                try:
+                    _, r, _ = adapter.execute_read_query(f"SELECT COUNT(*) FROM {t}")
+                    row_count = r[0][0] if r else 0
+                except Exception:
+                    row_count = 0
+                table_details.append({
+                    "name": t,
+                    "columns_count": len(cols),
+                    "row_count": row_count,
+                })
         except Exception:
             pass
     return {
         "connection": status_info,
         "tables": tables,
+        "table_details": table_details,
         "total_tables": len(tables),
     }
 
