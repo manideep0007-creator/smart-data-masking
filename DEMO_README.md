@@ -121,3 +121,4 @@ When the judges arrive at your laptop, follow this exact sequence using the **"â
 - **Verify Test Suite (Evidence for Judges):**
   - Run `python -m pytest backend/test_main.py -v` (39/39 passing unit tests).
   - Run `python e2e_test_suite.py` (34/34 passing live E2E integration tests).
+

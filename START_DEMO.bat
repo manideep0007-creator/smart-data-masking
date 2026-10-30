@@ -81,3 +81,4 @@ echo [INFO] Keep this terminal open or close it at any time.
 echo [INFO] To stop all demo servers safely, run STOP_DEMO.bat
 echo.
 pause
+
