@@ -21,18 +21,95 @@ if not DEMO_MODE and (not _RAW_SALT or _RAW_SALT == _DEFAULT_DEV_SALT):
 HASH_SALT = _RAW_SALT.encode("utf-8")
 
 
-def deterministic_hash(val: Any, prefix: str = "sha256:") -> str:
+class MaskedToken(str):
+    """
+    Explicit internal typed representation indicating a value has already undergone masking.
+    Inherits from str for seamless serialization, comparison, and formatting,
+    while enabling safe idempotence guards without relying on fragile string pattern heuristics.
+    """
+    pass
+
+
+def deterministic_hash(val: Any, prefix: str = "sha256:") -> MaskedToken:
     """
     Generate a deterministic, salted SHA-256 HMAC pseudonymized representation of a value.
     Preserves joinability and cardinality for analysts without exposing raw PII.
+    Employs an explicit typed internal representation (MaskedToken) to prevent accidental re-hashing.
+    Outputs a 128-bit (32 hexadecimal character) secure HMAC token.
     NOTE: This is pseudonymization, NOT irreversible anonymization.
     """
     if val is None:
+        return MaskedToken("")
+    if isinstance(val, MaskedToken):
+        return val
+    str_val = str(val).strip()
+    if not str_val:
+        return MaskedToken("")
+    digest = hmac.new(HASH_SALT, str_val.encode("utf-8"), hashlib.sha256).hexdigest()
+    # 32 hexadecimal characters = 128 bits of entropy
+    return MaskedToken(f"{prefix}{digest[:32]}")
+
+
+def mask_account_support(val: Any) -> str:
+    """
+    Mask bank account number for Support role, preserving the last four digits.
+    e.g. 123456789012 -> ********9012
+         987654321098 -> ********1098
+    """
+    if val is None:
         return ""
-    str_val = str(val).strip().encode("utf-8")
-    digest = hmac.new(HASH_SALT, str_val, hashlib.sha256).hexdigest()
-    # Return compact 12-char hex token e.g. 'sha256:7f83b1657ff1'
-    return f"{prefix}{digest[:12]}"
+    s = str(val).strip()
+    if not s:
+        return ""
+    digits = re.sub(r"\D", "", s)
+    if len(digits) >= 4:
+        prefix_len = max(4, len(digits) - 4)
+        return f"{'*' * prefix_len}{digits[-4:]}"
+    return "********"
+
+
+def mask_dob_support(val: Any) -> str:
+    """
+    Mask date of birth for Support role, preserving only the year and masking month/day.
+    e.g. 1995-08-14 -> 1995-**-**
+    """
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if not s:
+        return ""
+    match_iso = re.match(r"^(\d{4})[-/.]\d{2}[-/.]\d{2}$", s)
+    if match_iso:
+        return f"{match_iso.group(1)}-**-**"
+    match_year = re.match(r"^(\d{4})", s)
+    if match_year:
+        return f"{match_year.group(1)}-**-**"
+    return "****-**-**"
+
+
+def mask_pincode_support(val: Any) -> str:
+    """
+    Mask postal code / pincode for Support role.
+    e.g. 560083 -> 560***
+         781004 -> 781***
+         10001  -> 10***
+    """
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if not s:
+        return ""
+    digits = re.sub(r"\D", "", s)
+    if len(digits) == 6:
+        # Standard 6-digit Indian PIN code: preserve first 3 digits
+        return f"{digits[:3]}***"
+    elif len(digits) == 5:
+        # Standard 5-digit US ZIP code: preserve first 2 digits
+        return f"{digits[:2]}***"
+    elif len(digits) > 3:
+        prefix_len = min(3, len(digits) // 2)
+        return f"{digits[:prefix_len]}{'*' * (len(digits) - prefix_len)}"
+    return "******"
 
 
 def mask_credit_card_support(val: Any) -> str:
@@ -113,9 +190,12 @@ def mask_address_support(val: Any) -> str:
     if val is None:
         return ""
     s = str(val).strip()
+    if not s:
+        return ""
     if "," in s:
-        city = s.split(",")[-1].strip()
-        return f"***, {city}"
+        parts = [p.strip() for p in s.split(",") if p.strip()]
+        if len(parts) > 1:
+            return f"***, {parts[-1]}"
     return "[PARTIALLY MASKED]"
 
 
@@ -129,12 +209,17 @@ def mask_value_for_role(
     if raw_value is None:
         return None
 
+    # Idempotence protection: if value has already been processed into a MaskedToken, pass through
+    if isinstance(raw_value, MaskedToken):
+        return raw_value
+
     # Admin sees everything unmasked
     if role == "Admin":
         return raw_value
 
     tag = classification.get("tag", "PUBLIC")
     pii_type = classification.get("pii_type", "NONE")
+    col_name = classification.get("name", "").lower()
 
     # If column is public / non-sensitive, no masking needed
     if tag == "PUBLIC":
@@ -144,31 +229,37 @@ def mask_value_for_role(
     if role == "Analyst":
         if mask_strategy == "hash":
             return deterministic_hash(raw_value)
-        return "[REDACTED]"
+        return MaskedToken("[REDACTED]")
 
     # Support role: targeted partial masking
     if role == "Support":
         if pii_type == "CREDIT_CARD":
-            return mask_credit_card_support(raw_value)
+            return MaskedToken(mask_credit_card_support(raw_value))
         elif pii_type == "SSN":
-            return mask_ssn_support(raw_value)
+            return MaskedToken(mask_ssn_support(raw_value))
         elif pii_type == "AADHAAR":
-            return mask_aadhaar_support(raw_value)
+            return MaskedToken(mask_aadhaar_support(raw_value))
         elif pii_type == "PAN":
-            return mask_pan_support(raw_value)
+            return MaskedToken(mask_pan_support(raw_value))
         elif pii_type == "EMAIL":
-            return mask_email_support(raw_value)
+            return MaskedToken(mask_email_support(raw_value))
         elif pii_type == "PHONE":
-            return mask_phone_support(raw_value)
-        elif pii_type == "FINANCIAL":
-            return "[CONFIDENTIAL]"
+            return MaskedToken(mask_phone_support(raw_value))
+        elif pii_type == "DATE_OF_BIRTH":
+            return MaskedToken(mask_dob_support(raw_value))
         elif pii_type == "ADDRESS":
-            return mask_address_support(raw_value)
+            if re.search(r"(pincode|pin_code|zip|zipcode|postal)", col_name):
+                return MaskedToken(mask_pincode_support(raw_value))
+            return MaskedToken(mask_address_support(raw_value))
+        elif pii_type in ("BANK_ACCOUNT", "ACCOUNT") or (pii_type == "FINANCIAL" and re.search(r"(account|acct)", col_name)):
+            return MaskedToken(mask_account_support(raw_value))
+        elif pii_type == "FINANCIAL":
+            return MaskedToken("[CONFIDENTIAL]")
         elif pii_type == "NAME":
             # Support agents need customer name unmasked for customer service
             return raw_value
         else:
-            return "[PROTECTED]"
+            return MaskedToken("[PROTECTED]")
 
     return raw_value
 

@@ -8,9 +8,10 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def setup_database():
-    """Ensure database is seeded before each test."""
-    init_db()
+def setup_database(monkeypatch):
+    """Ensure database is seeded before each test and runs against demo db for legacy test assertions."""
+    monkeypatch.setenv("DB_PATH", DEFAULT_DB_PATH)
+    init_db(DEFAULT_DB_PATH)
 
 
 def test_health_endpoint():
@@ -527,3 +528,305 @@ def test_frontend_backend_connectivity_and_cors():
     root_resp = client.get("/")
     assert root_resp.status_code == 200
     assert root_resp.json()["status"] == "online"
+
+
+# =====================================================================
+# SAFFRON BANK PII DETECTION & AUDIT TESTS (STEP 3, 3.1 & 3.2)
+# =====================================================================
+
+def test_saffron_bank_positive_pii_detection():
+    from backend.detector import classify_column
+
+    # 1. Names (Customer, Parent, Nominee, Cardholder)
+    for col in ["cust_nm", "pita_nm", "nominee_nm", "name_on_card", "NAME_ON_CARD"]:
+        res = classify_column(col)
+        assert res["tag"] == "PII_LOW", f"Expected PII_LOW for {col}, got {res['tag']}"
+        assert res["pii_type"] == "NAME", f"Expected NAME for {col}, got {res['pii_type']}"
+
+    # 2. Contact details
+    for col in ["mob_no", "alt_mob", "us_phone"]:
+        res = classify_column(col)
+        assert res["tag"] == "PII_MEDIUM", f"Expected PII_MEDIUM for {col}, got {res['tag']}"
+        assert res["pii_type"] == "PHONE", f"Expected PHONE for {col}, got {res['pii_type']}"
+
+    res_email = classify_column("emailid")
+    assert res_email["tag"] == "PII_MEDIUM", f"Expected PII_MEDIUM for emailid, got {res_email['tag']}"
+    assert res_email["pii_type"] == "EMAIL", f"Expected EMAIL for emailid, got {res_email['pii_type']}"
+
+    # 3. Addresses
+    for col in ["addr_line1", "addr_line2", "addr", "us_addr", "city", "us_city", "state", "us_state", "pincode", "us_zip"]:
+        res = classify_column(col)
+        assert res["tag"] == "PII_MEDIUM", f"Expected PII_MEDIUM for {col}, got {res['tag']}"
+        assert res["pii_type"] == "ADDRESS", f"Expected ADDRESS for {col}, got {res['pii_type']}"
+
+    # 4. Government IDs
+    res_pan = classify_column("pan_no")
+    assert res_pan["tag"] == "PII_HIGH" and res_pan["pii_type"] == "PAN"
+
+    res_aadhaar = classify_column("aadhaar_no")
+    assert res_aadhaar["tag"] == "PII_HIGH" and res_aadhaar["pii_type"] == "AADHAAR"
+
+    res_ssn = classify_column("ssn")
+    assert res_ssn["tag"] == "PII_HIGH" and res_ssn["pii_type"] == "SSN"
+
+    # 5. Financial accounts, cards, and balances
+    res_card = classify_column("CARD_NO")
+    assert res_card["tag"] == "FINANCIAL_CONFIDENTIAL" and res_card["pii_type"] == "CREDIT_CARD"
+
+    for col in ["account_no", "linked_acct", "curr_bal", "credit_limit", "outstanding_amt", "declared_income_inr", "sanctioned_amt_inr", "credit_score", "amount_inr", "bal_after"]:
+        res = classify_column(col)
+        assert res["tag"] == "FINANCIAL_CONFIDENTIAL", f"Expected FINANCIAL_CONFIDENTIAL for {col}, got {res['tag']}"
+        assert res["pii_type"] == "FINANCIAL", f"Expected FINANCIAL for {col}, got {res['pii_type']}"
+
+    # 6. Personal Date of Birth
+    res_dob = classify_column("dob_dt")
+    assert res_dob["tag"] == "PII_MEDIUM" and res_dob["pii_type"] == "DATE_OF_BIRTH"
+
+
+def test_saffron_bank_false_positive_exclusions():
+    from backend.detector import classify_column
+
+    # Technical references, audit fields, and organizational/public entities must NOT be flagged as PII
+    non_pii_cols = [
+        "txn_id", "transaction_id", "ref_no", "rrn", "branch_code", "card_ref",
+        "ticket_id", "app_id", "kyc_id", "customer_id", "cif", "cust_id", "id",
+        "card_network", "card_type", "card_variant", "card_status",
+        "acct_status", "kyc_status", "txn_status", "acct_type", "loan_type",
+        "ovd_type", "status", "gender", "occupation", "segment", "risk_cat",
+        "preferred_lang", "priority", "channel", "decision", "emp_type",
+        "open_dt", "last_txn_dt", "applied_on", "created_ts", "resolved_ts",
+        "issued_on", "verified_on", "next_review_dt", "opened_on", "customer_since",
+        "last_login_ts", "txn_ts", "fatca_reported_on", "exp_mm", "exp_yyyy",
+        "branch_nm", "tenure_mths", "roi_pct", "int_rate_pct", "ifsc",
+        "branch_phone", "branch_email", "employer_nm", "counterparty",
+        "verified_by", "assigned_to"
+    ]
+
+    for col in non_pii_cols:
+        sample_vals = ["7306089151955450"] if "id" in col or "ref" in col else ["ACTIVE"]
+        res = classify_column(col, sample_vals)
+        assert res["tag"] == "PUBLIC", f"Expected PUBLIC for {col}, but got {res['tag']} ({res['pii_type']})"
+        assert res["pii_type"] == "NONE", f"Expected NONE for {col}, but got {res['pii_type']}"
+
+
+def test_saffron_bank_precision_audit_cases():
+    """Targeted tests for Step 3.1 & 3.2 PII Classification Precision Audit."""
+    from backend.detector import classify_column
+
+    # 1. Branch organizational contact channels & locations (Public vs Personal PII)
+    res_bphone = classify_column("branch_phone", ["+91-361-2345678"])
+    assert res_bphone["tag"] == "PUBLIC"
+    assert res_bphone["pii_type"] == "NONE"
+
+    res_bemail = classify_column("branch_email", ["guwahati.neelgiri@saffronbank.example"])
+    assert res_bemail["tag"] == "PUBLIC"
+    assert res_bemail["pii_type"] == "NONE"
+
+    # Branch directory addresses with table context
+    res_baddr = classify_column("addr", ["Ground Floor, 214 Palm Road"], table_name="branches")
+    assert res_baddr["tag"] == "PUBLIC"
+    assert res_baddr["pii_type"] == "NONE"
+
+    res_bcity = classify_column("city", ["Bengaluru"], table_name="branches")
+    assert res_bcity["tag"] == "PUBLIC"
+
+    # 2. Employer name & Counterparty (Organizational entity vs Individual PII)
+    res_emp = classify_column("employer_nm", ["Municipal Corporation", "Kaveri Cements Ltd", "Pragati Engineering Co"])
+    assert res_emp["tag"] == "PUBLIC"
+    assert res_emp["pii_type"] == "NONE"
+
+    res_cp = classify_column("counterparty", ["MUNICIPAL CORPORATION", "SAFFRON RETAIL GROUP", "ELECTRICITY BOARD"])
+    assert res_cp["tag"] == "PUBLIC"
+    assert res_cp["pii_type"] == "NONE"
+
+    # 3. Operational routing & employee IDs
+    res_assigned = classify_column("assigned_to", ["nri_desk_14", "cc_agent_02"])
+    assert res_assigned["tag"] == "PUBLIC"
+    assert res_assigned["pii_type"] == "NONE"
+
+    res_verified = classify_column("verified_by", ["E414683", "E293428"])
+    assert res_verified["tag"] == "PUBLIC"
+    assert res_verified["pii_type"] == "NONE"
+
+    # 4. Demographic attributes (Public categorical)
+    assert classify_column("gender", ["Male", "Female"])["tag"] == "PUBLIC"
+    assert classify_column("occupation", ["Salaried - Private", "Business Owner"])["tag"] == "PUBLIC"
+
+    # 5. Unstructured text & semi-structured payloads (Column-level flag verification)
+    for col in ["ticket_text", "notes", "remarks", "extra_info", "kyc_meta"]:
+        res_text = classify_column(col, ["Customer support note or KYC JSON"])
+        assert res_text["tag"] == "PII_MEDIUM"
+        assert res_text["pii_type"] == "UNSTRUCTURED_TEXT"
+        assert "column-level flag; not inline NLP extraction" in res_text["heuristic"]
+
+    # 6. col_7 PAN sample-value detection precision (Positive and Negative verification)
+    # Positive PAN samples
+    pan_positives = ["AHLPP0000O", "AKZPS0000Q", "BNZPG0000Z", "DFCPS0000K"]
+    res_pan_pos = classify_column("col_7", pan_positives)
+    assert res_pan_pos["tag"] == "PII_HIGH"
+    assert res_pan_pos["pii_type"] == "PAN"
+
+    # Negative non-PAN samples (IFSC, transaction references, amounts, status words)
+    assert classify_column("col_7", ["SAFF0027168"])["tag"] == "PUBLIC"  # IFSC (SAFF + 0 + 6 digits)
+    assert classify_column("col_7", ["TXN9988776655"])["tag"] == "PUBLIC"  # Alphanumeric txn ID
+    assert classify_column("col_7", ["ACTIVE", "PENDING", "APPROVED"])["tag"] == "PUBLIC"  # Status words
+    assert classify_column("col_7", ["50000.00", "125000.50"])["tag"] == "PUBLIC"  # Financial amounts
+    assert classify_column("col_7", ["98765432109876"])["tag"] == "PUBLIC"  # 14-digit account number
+
+
+# =====================================================================
+# STEP 5A: CORE PII MASKING IMPROVEMENTS & PRECISION TESTS
+# =====================================================================
+
+def test_step5a_account_and_linked_account_masking():
+    from backend.masker import mask_account_support, mask_value_for_role
+
+    # Direct helper verification
+    assert mask_account_support("123456789012") == "********9012"
+    assert mask_account_support("987654321098") == "********1098"
+    assert mask_account_support("12345678") == "****5678"
+    assert mask_account_support("12") == "********"
+
+    # Role-based dispatch for account_no and LINKED_ACCT
+    acct_meta = {"name": "account_no", "tag": "FINANCIAL_CONFIDENTIAL", "pii_type": "FINANCIAL"}
+    linked_meta = {"name": "LINKED_ACCT", "tag": "FINANCIAL_CONFIDENTIAL", "pii_type": "FINANCIAL"}
+    bal_meta = {"name": "curr_bal", "tag": "FINANCIAL_CONFIDENTIAL", "pii_type": "FINANCIAL"}
+
+    # Support role
+    assert mask_value_for_role("Support", acct_meta, "123456789012") == "********9012"
+    assert mask_value_for_role("Support", linked_meta, "987654321098") == "********1098"
+    assert mask_value_for_role("Support", bal_meta, "54200.50") == "[CONFIDENTIAL]"
+
+    # Analyst role: redaction & hashing
+    assert mask_value_for_role("Analyst", acct_meta, "123456789012", mask_strategy="redact") == "[REDACTED]"
+    analyst_hash = mask_value_for_role("Analyst", acct_meta, "123456789012", mask_strategy="hash")
+    assert analyst_hash.startswith("sha256:")
+    assert len(analyst_hash) == 39  # sha256: (7) + 32 hex chars = 39
+
+    # Admin role: unmasked
+    assert mask_value_for_role("Admin", acct_meta, "123456789012") == "123456789012"
+
+
+def test_step5a_dob_masking():
+    from backend.masker import mask_dob_support, mask_value_for_role
+
+    # Direct helper verification
+    assert mask_dob_support("1995-08-14") == "1995-**-**"
+    assert mask_dob_support("1982/11/25") == "1982-**-**"
+    assert mask_dob_support("2001-01-01 12:00:00") == "2001-**-**"
+    assert mask_dob_support("invalid-dob") == "****-**-**"
+
+    dob_meta = {"name": "dob_dt", "tag": "PII_MEDIUM", "pii_type": "DATE_OF_BIRTH"}
+
+    # Support role
+    assert mask_value_for_role("Support", dob_meta, "1995-08-14") == "1995-**-**"
+
+    # Analyst role: never receives original DOB
+    assert mask_value_for_role("Analyst", dob_meta, "1995-08-14", mask_strategy="redact") == "[REDACTED]"
+    analyst_dob_hash = mask_value_for_role("Analyst", dob_meta, "1995-08-14", mask_strategy="hash")
+    assert analyst_dob_hash.startswith("sha256:")
+    assert "1995" not in analyst_dob_hash
+
+    # Admin role: unmasked
+    assert mask_value_for_role("Admin", dob_meta, "1995-08-14") == "1995-08-14"
+
+
+def test_step5a_pincode_masking():
+    from backend.masker import mask_pincode_support, mask_value_for_role
+
+    # Direct helper verification
+    assert mask_pincode_support("560083") == "560***"
+    assert mask_pincode_support("781004") == "781***"
+    assert mask_pincode_support("10001") == "10***"
+    assert mask_pincode_support("12") == "******"
+
+    pin_meta = {"name": "pincode", "tag": "PII_MEDIUM", "pii_type": "ADDRESS"}
+    zip_meta = {"name": "us_zip", "tag": "PII_MEDIUM", "pii_type": "ADDRESS"}
+    addr_meta = {"name": "addr_line1", "tag": "PII_MEDIUM", "pii_type": "ADDRESS"}
+
+    # Support role
+    assert mask_value_for_role("Support", pin_meta, "560083") == "560***"
+    assert mask_value_for_role("Support", zip_meta, "10001") == "10***"
+    assert mask_value_for_role("Support", addr_meta, "Flat 402, Neelgiri") == "***, Neelgiri"
+
+    # Analyst role
+    assert mask_value_for_role("Analyst", pin_meta, "560083") == "[REDACTED]"
+
+
+def test_step5a_hmac_determinism_length_and_idempotence():
+    from backend.masker import deterministic_hash, MaskedToken, mask_value_for_role
+
+    # Length test: 32 hex chars (128 bits) + 7 chars for "sha256:" = 39 total
+    token = deterministic_hash("cust_secret_123")
+    assert token.startswith("sha256:")
+    assert len(token) == 39
+    hex_digest = token.split("sha256:")[1]
+    assert len(hex_digest) == 32
+    assert all(c in "0123456789abcdef" for c in hex_digest)
+
+    # Determinism test
+    token2 = deterministic_hash("cust_secret_123")
+    assert token == token2
+
+    # Distinctness test
+    token_diff = deterministic_hash("cust_secret_456")
+    assert token != token_diff
+
+    # Idempotence: MaskedToken is not re-hashed
+    assert isinstance(token, MaskedToken)
+    token_rehashed = deterministic_hash(token)
+    assert token_rehashed == token
+    assert token_rehashed is token
+
+    # Verification that raw string matching sha256: pattern IS safely hashed (not falsely bypassed)
+    raw_spoofed_str = "sha256:spoofed_fake_token_not_masked_yet"
+    hashed_spoof = deterministic_hash(raw_spoofed_str)
+    assert hashed_spoof != raw_spoofed_str
+    assert hashed_spoof.startswith("sha256:")
+
+    # Pipeline idempotence via mask_value_for_role
+    acct_meta = {"name": "account_no", "tag": "FINANCIAL_CONFIDENTIAL", "pii_type": "FINANCIAL"}
+    m1 = mask_value_for_role("Support", acct_meta, "123456789012")
+    m2 = mask_value_for_role("Support", acct_meta, m1)
+    assert m1 == m2 == "********9012"
+
+
+def test_step5a_null_empty_and_unexpected_types():
+    from backend.masker import (
+        mask_account_support,
+        mask_dob_support,
+        mask_pincode_support,
+        deterministic_hash,
+        mask_value_for_role,
+    )
+
+    # Nulls return safe empty strings
+    assert mask_account_support(None) == ""
+    assert mask_dob_support(None) == ""
+    assert mask_pincode_support(None) == ""
+    assert deterministic_hash(None) == ""
+
+    # Empty and whitespace
+    assert mask_account_support("") == ""
+    assert mask_account_support("   ") == ""
+    assert mask_dob_support("") == ""
+    assert mask_dob_support("   ") == ""
+    assert mask_pincode_support("") == ""
+    assert mask_pincode_support("   ") == ""
+    assert deterministic_hash("") == ""
+    assert deterministic_hash("   ") == ""
+
+    # Integer / numeric inputs
+    assert mask_account_support(123456789012) == "********9012"
+    assert mask_pincode_support(560083) == "560***"
+    int_hash = deterministic_hash(999888777)
+    assert int_hash.startswith("sha256:")
+
+    # mask_value_for_role with None raw_value returns None
+    meta = {"name": "account_no", "tag": "FINANCIAL_CONFIDENTIAL", "pii_type": "FINANCIAL"}
+    assert mask_value_for_role("Support", meta, None) is None
+    assert mask_value_for_role("Analyst", meta, None) is None
+    assert mask_value_for_role("Admin", meta, None) is None
+
+
+
