@@ -3,6 +3,13 @@ import os
 import sqlite3
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
+from dotenv import load_dotenv
+
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ENV_PATH = os.path.join(_PROJECT_ROOT, ".env")
+if os.path.exists(_ENV_PATH):
+    load_dotenv(_ENV_PATH)
+
 from fastapi import FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
