@@ -829,4 +829,148 @@ def test_step5a_null_empty_and_unexpected_types():
     assert mask_value_for_role("Admin", meta, None) is None
 
 
+# =====================================================================
+# STEP 5B: CONTEXT-AWARE UNSTRUCTURED TEXT & JSON PII PROTECTION TESTS
+# =====================================================================
+
+def test_step5b_unstructured_text_inline_masking():
+    from backend.masker import mask_unstructured_text_support
+
+    # 1. Email embedded in ticket text
+    s1 = "Customer submitted query from user.support@testcorp.org asking for statement."
+    m1 = mask_unstructured_text_support(s1)
+    assert "[EMAIL]" in m1
+    assert "user.support@testcorp.org" not in m1
+    assert "Customer submitted query from [EMAIL] asking for statement." == m1
+
+    # 2. Phone embedded in notes
+    s2 = "Agent followed up on mobile 9876543210 regarding issue."
+    m2 = mask_unstructured_text_support(s2)
+    assert "[PHONE]" in m2
+    assert "9876543210" not in m2
+
+    # 3. PAN and Aadhaar embedded in text
+    s3 = "Identity verified via PAN ABCDE1234F and Aadhaar 1234-5678-9012 at branch."
+    m3 = mask_unstructured_text_support(s3)
+    assert "[PAN]" in m3
+    assert "[AADHAAR]" in m3
+    assert "ABCDE1234F" not in m3
+    assert "1234-5678-9012" not in m3
+
+    # 4. Payment card and SSN embedded in text
+    s4 = "Charge dispute for card 4111-2222-3333-4444 and SSN 123-45-6789."
+    m4 = mask_unstructured_text_support(s4)
+    assert "[CREDIT_CARD]" in m4
+    assert "[SSN]" in m4
+    assert "4111-2222-3333-4444" not in m4
+    assert "123-45-6789" not in m4
+
+    # 5. Bank account embedded in extra_info
+    s5 = "Old a/c no 015808857442 migrated from legacy CBS"
+    m5 = mask_unstructured_text_support(s5)
+    assert "[ACCOUNT]" in m5
+    assert "015808857442" not in m5
+
+    # 6. Ordinary dates, amounts, and transaction references preserved intact
+    s6 = "Transaction SAFF0027168 on date 2026-04-12 for Rs 1500.50 processed successfully."
+    m6 = mask_unstructured_text_support(s6)
+    assert m6 == s6  # Completely preserved without over-masking!
+
+
+def test_step5b_kyc_meta_json_masking():
+    import json
+    from backend.masker import mask_kyc_meta_support
+
+    # 1. Valid nested JSON with sensitive keys
+    kyc_payload = {
+        "src": "IN-PERSON",
+        "ovd": "Aadhaar",
+        "name_match": 95,
+        "officer": {
+            "maker": "E742666",
+            "checker": "E768060",
+            "father_name": "Synthetic Relative Name"
+        },
+        "contacts": [
+            {"alt_email": "demo.user@synmail.example", "prev_mobile": "9999988888"}
+        ],
+        "identifiers": {
+            "pan": "ABCDE1234F",
+            "uid": "1234-5678-9012"
+        }
+    }
+    raw_json = json.dumps(kyc_payload)
+    masked_json_str = mask_kyc_meta_support(raw_json)
+
+    # Must remain valid JSON
+    parsed = json.loads(masked_json_str)
+
+    # Sensitive fields protected
+    assert parsed["officer"]["father_name"] == "[CONFIDENTIAL]"
+    assert parsed["contacts"][0]["alt_email"] == "d***@synmail.example"
+    assert parsed["contacts"][0]["prev_mobile"] == "***-***-8888"
+    assert parsed["identifiers"]["pan"] == "XXXXX1234F"
+    assert parsed["identifiers"]["uid"] == "XXXX-XXXX-9012"
+
+    # Non-sensitive audit fields preserved
+    assert parsed["src"] == "IN-PERSON"
+    assert parsed["ovd"] == "Aadhaar"
+    assert parsed["name_match"] == 95
+    assert parsed["officer"]["maker"] == "E742666"
+    assert parsed["officer"]["checker"] == "E768060"
+
+    # 2. Invalid JSON handling: fallback without leaking raw payload
+    invalid_json = "{bad json: father_name: Synthetic Name"
+    fallback_res = mask_kyc_meta_support(invalid_json)
+    assert fallback_res == "[PROTECTED_METADATA]"
+    assert "Synthetic Name" not in fallback_res
+
+    # 3. Null and empty inputs
+    assert mask_kyc_meta_support(None) == ""
+    assert mask_kyc_meta_support("") == ""
+    assert mask_kyc_meta_support("   ") == ""
+
+
+def test_step5b_role_based_unstructured_protection_and_idempotence():
+    import json
+    from backend.masker import mask_value_for_role, MaskedToken
+
+    ticket_text = "Customer called from 9876543210 regarding issue."
+    kyc_json = json.dumps({"src": "ONLINE", "father_name": "Relative", "name_match": 88})
+
+    ticket_meta = {"name": "ticket_text", "tag": "PII_MEDIUM", "pii_type": "UNSTRUCTURED_TEXT"}
+    kyc_meta = {"name": "kyc_meta", "tag": "PII_MEDIUM", "pii_type": "UNSTRUCTURED_TEXT"}
+
+    # 1. Admin receives raw values
+    assert mask_value_for_role("Admin", ticket_meta, ticket_text) == ticket_text
+    assert mask_value_for_role("Admin", kyc_meta, kyc_json) == kyc_json
+
+    # 2. Support receives context-aware sanitized values
+    sup_ticket = mask_value_for_role("Support", ticket_meta, ticket_text)
+    assert "[PHONE]" in sup_ticket
+    assert "9876543210" not in sup_ticket
+    assert "Customer called from [PHONE] regarding issue." == sup_ticket
+
+    sup_kyc = mask_value_for_role("Support", kyc_meta, kyc_json)
+    parsed_sup_kyc = json.loads(sup_kyc)
+    assert parsed_sup_kyc["father_name"] == "[CONFIDENTIAL]"
+    assert parsed_sup_kyc["src"] == "ONLINE"
+
+    # 3. Analyst receives redaction or deterministic hash
+    assert mask_value_for_role("Analyst", ticket_meta, ticket_text, mask_strategy="redact") == "[REDACTED]"
+    assert mask_value_for_role("Analyst", kyc_meta, kyc_json, mask_strategy="redact") == "[REDACTED]"
+
+    analyst_hash = mask_value_for_role("Analyst", ticket_meta, ticket_text, mask_strategy="hash")
+    assert analyst_hash.startswith("sha256:")
+    assert len(analyst_hash) == 39
+
+    # 4. Idempotence: repeated masking does not corrupt already-masked output
+    repeat_sup_ticket = mask_value_for_role("Support", ticket_meta, sup_ticket)
+    assert repeat_sup_ticket == sup_ticket
+
+    repeat_sup_kyc = mask_value_for_role("Support", kyc_meta, sup_kyc)
+    assert repeat_sup_kyc == sup_kyc
+
+
+
 

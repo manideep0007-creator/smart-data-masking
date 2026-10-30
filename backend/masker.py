@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import json
 import os
 import re
 from typing import Any, Dict, List, Optional
@@ -199,6 +200,111 @@ def mask_address_support(val: Any) -> str:
     return "[PARTIALLY MASKED]"
 
 
+# Explicit sensitive keys for structured and semi-structured JSON payloads
+SENSITIVE_JSON_KEYS = {
+    "pan", "pan_no", "aadhaar", "aadhaar_no", "uid", "ssn", "social_security",
+    "email", "alt_email", "phone", "mobile", "prev_mobile", "alt_mob", "mob_no",
+    "father_name", "pita_nm", "mother_name", "nominee_name", "nominee_nm",
+    "dob", "dob_dt", "birth_date", "card_no", "credit_card", "account_no",
+    "password", "pin", "otp", "secret", "cvv"
+}
+
+
+def mask_unstructured_text_support(val: Any) -> str:
+    """
+    Apply scoped pattern-based inline redaction to free-form text for the Support role.
+    Redacts identifiable emails, phones, PAN, Aadhaar, cards, account numbers, and SSNs,
+    while preserving ordinary surrounding conversation, dates, amounts, and transaction references.
+    """
+    if val is None:
+        return ""
+    s = str(val)
+    if not s.strip():
+        return ""
+
+    # 1. Emails
+    s = re.sub(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", "[EMAIL]", s)
+
+    # 2. Credit / Debit card numbers (grouped 4x4 or 16 continuous digits)
+    s = re.sub(r"\b(?:\d{4}[- ]){3}\d{4}\b", "[CREDIT_CARD]", s)
+    s = re.sub(r"\b[456]\d{15}\b", "[CREDIT_CARD]", s)
+
+    # 3. Indian PAN (5 uppercase letters, 4 digits, 1 uppercase letter)
+    s = re.sub(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b", "[PAN]", s)
+
+    # 4. Indian Aadhaar (12 digits formatted as XXXX-XXXX-XXXX or XXXX XXXX XXXX)
+    s = re.sub(r"\b\d{4}[- ]\d{4}[- ]\d{4}\b", "[AADHAAR]", s)
+
+    # 5. US SSN (3 digits - 2 digits - 4 digits)
+    s = re.sub(r"\b\d{3}-\d{2}-\d{4}\b", "[SSN]", s)
+
+    # 6. Labeled Bank Account numbers (e.g. "a/c no 015808857442" or "acct # 123456789012")
+    s = re.sub(r"(?i)\b(?:a/c|acct|account)(?:\s+(?:no|num|number))?[:\s#]+(\d{9,18})\b", r"a/c no [ACCOUNT]", s)
+
+    # 7. Phone numbers:
+    # a. Labeled contact numbers (e.g. "mob 90000 45752" or "contact 9999988264" or "phone: +91-98765-43210")
+    s = re.sub(
+        r"(?i)\b(?:mob(?:ile)?|phone|tel|contact|cell)(?:[:\s#]+)(\+?\d{1,3}[- ]?)?(\d{5}[- ]?\d{5}|\d{10}|\d{3}[- ]?\d{3}[- ]?\d{4})\b",
+        r"contact [PHONE]",
+        s,
+    )
+    # b. Standalone formatted phone numbers (+91-98765-43210 or 10-digit mobile starting with 6-9 in India or US formatted (123) 456-7890)
+    s = re.sub(r"\b(?:\+?91[- ]?)?[6-9]\d{4}[- ]?\d{5}\b", "[PHONE]", s)
+    s = re.sub(r"\b\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b", "[PHONE]", s)
+
+    return s
+
+
+def _mask_json_node(obj: Any) -> Any:
+    """Recursively mask nested JSON objects and arrays."""
+    if isinstance(obj, dict):
+        new_dict = {}
+        for k, v in obj.items():
+            k_norm = str(k).lower().strip()
+            if k_norm in SENSITIVE_JSON_KEYS:
+                if "pan" in k_norm:
+                    new_dict[k] = mask_pan_support(v)
+                elif k_norm in ("aadhaar", "uid", "ssn"):
+                    new_dict[k] = mask_aadhaar_support(v) if "aadhaar" in k_norm or "uid" in k_norm else "[CONFIDENTIAL]"
+                elif "email" in k_norm:
+                    new_dict[k] = mask_email_support(v)
+                elif any(p in k_norm for p in ("phone", "mobile", "mob")):
+                    new_dict[k] = mask_phone_support(v)
+                else:
+                    new_dict[k] = "[CONFIDENTIAL]"
+            else:
+                new_dict[k] = _mask_json_node(v)
+        return new_dict
+    elif isinstance(obj, list):
+        return [_mask_json_node(item) for item in obj]
+    elif isinstance(obj, str):
+        # Sanitize any embedded identifiable PII inside non-sensitive text fields
+        return mask_unstructured_text_support(obj)
+    else:
+        return obj
+
+
+def mask_kyc_meta_support(val: Any) -> str:
+    """
+    Safely parse, inspect, and mask semi-structured KYC JSON payloads for the Support role.
+    Recursively protects sensitive personal keys (pan, email, phone, father_name, etc.),
+    while preserving non-sensitive audit metadata (src, ovd, maker, checker, name_match).
+    Guarantees valid JSON output and uses a conservative fallback on malformed input.
+    """
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if not s:
+        return ""
+    try:
+        data = json.loads(s)
+        masked_data = _mask_json_node(data)
+        return json.dumps(masked_data)
+    except Exception:
+        # Conservative fallback: prevent any raw sensitive data leakage
+        return "[PROTECTED_METADATA]"
+
+
 def mask_value_for_role(
     role: str,
     classification: Dict[str, Any],
@@ -231,7 +337,7 @@ def mask_value_for_role(
             return deterministic_hash(raw_value)
         return MaskedToken("[REDACTED]")
 
-    # Support role: targeted partial masking
+    # Support role: targeted partial masking & context-aware text/JSON protection
     if role == "Support":
         if pii_type == "CREDIT_CARD":
             return MaskedToken(mask_credit_card_support(raw_value))
@@ -255,6 +361,10 @@ def mask_value_for_role(
             return MaskedToken(mask_account_support(raw_value))
         elif pii_type == "FINANCIAL":
             return MaskedToken("[CONFIDENTIAL]")
+        elif pii_type == "UNSTRUCTURED_TEXT" or col_name in ("ticket_text", "notes", "remarks", "extra_info", "kyc_meta"):
+            if col_name in ("kyc_meta", "kyc_metadata"):
+                return MaskedToken(mask_kyc_meta_support(raw_value))
+            return MaskedToken(mask_unstructured_text_support(raw_value))
         elif pii_type == "NAME":
             # Support agents need customer name unmasked for customer service
             return raw_value
