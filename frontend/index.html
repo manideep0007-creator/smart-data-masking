@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Data Masking — Security Operations Console</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="shield-icon">🛡️</div>
+        <div>
+          <h1>Smart Data Masking</h1>
+          <p class="subtitle">Autonomous In-Flight PII Protection & Query Gateway</p>
+        </div>
+      </div>
+      <div class="header-controls">
+        <div class="api-config">
+          <label for="apiUrlInput">Gateway API:</label>
+          <input type="text" id="apiUrlInput" value="http://127.0.0.1:8000" />
+          <button id="reconnectBtn" title="Test Connection">Recheck</button>
+        </div>
+        <div id="statusBadge" class="status-badge connecting">
+          <span class="status-dot"></span>
+          <span id="statusText">Checking Gateway...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="console-grid">
+      <!-- Left Column: Schema Scan & Policy Legend -->
+      <section class="panel pii-panel">
+        <div class="panel-header">
+          <h2>🔍 PII Schema Radar</h2>
+          <button id="scanBtn" class="btn btn-secondary btn-sm">Scan Schema</button>
+        </div>
+        <p class="panel-desc">Real-time heuristic column detection & classification (<code>GET /scan</code>)</p>
+        
+        <div id="scanStatus" class="info-alert">Click "Scan Schema" to inspect detected sensitive fields.</div>
+        
+        <div id="schemaBadgesList" class="badges-container">
+          <!-- Dynamically populated schema tags -->
+        </div>
+
+        <div class="policy-legend">
+          <h3>🛡️ Role Policy Matrix</h3>
+          <div class="legend-row">
+            <span class="role-tag admin">Admin</span>
+            <span>Full unmasked access (raw database values)</span>
+          </div>
+          <div class="legend-row">
+            <span class="role-tag support">Support</span>
+            <span>Targeted partial masking (<code>4111-XXXX-XXXX-1111</code>, names preserved)</span>
+          </div>
+          <div class="legend-row">
+            <span class="role-tag analyst">Analyst</span>
+            <span>Complete redaction of sensitive identifiers (<code>[REDACTED]</code>)</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Column: Query Operations Console & Results -->
+      <section class="panel query-panel">
+        <div class="panel-header">
+          <h2>⚡ Query Operations Gateway</h2>
+          <span class="badge-tag safe-mode">Read-Only Guard Active</span>
+        </div>
+
+        <!-- Role Selection -->
+        <div class="role-bar">
+          <label class="section-label">Active Query Persona:</label>
+          <div class="role-radios">
+            <label class="role-option">
+              <input type="radio" name="userRole" value="Support" checked />
+              <span class="role-card support-card">
+                <strong>Support</strong>
+                <small>Masked Cards & SSN</small>
+              </span>
+            </label>
+            <label class="role-option">
+              <input type="radio" name="userRole" value="Analyst" />
+              <span class="role-card analyst-card">
+                <strong>Analyst</strong>
+                <small>Fully Redacted</small>
+              </span>
+            </label>
+            <label class="role-option">
+              <input type="radio" name="userRole" value="Admin" />
+              <span class="role-card admin-card">
+                <strong>Admin</strong>
+                <small>Unmasked Raw</small>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <!-- SQL Editor -->
+        <div class="editor-block">
+          <div class="editor-header">
+            <span class="section-label">SQL Query (Single Read-Only SELECT)</span>
+            <div class="template-chips">
+              <span class="chip-label">Quick Templates:</span>
+              <button class="chip" data-sql="SELECT name, card_number FROM customers">Default Cards</button>
+              <button class="chip" data-sql="SELECT id, name, card_number, ssn, email, salary FROM customers">Full PII Profile</button>
+              <button class="chip chip-danger" data-sql="DROP TABLE customers">Test Write Rejection</button>
+              <button class="chip chip-danger" data-sql="SELECT name FROM customers; DROP TABLE customers">Test Injection</button>
+            </div>
+          </div>
+          <textarea id="sqlInput" class="sql-textarea" rows="4" spellcheck="false">SELECT name, card_number FROM customers</textarea>
+          
+          <div class="editor-actions">
+            <button id="runBtn" class="btn btn-primary">
+              <span class="btn-icon">▶</span> Run Query via Gateway
+            </button>
+            <span id="queryMeta" class="query-meta-text">Press Run to execute against gateway</span>
+          </div>
+        </div>
+
+        <!-- Error & Alert Box -->
+        <div id="errorAlert" class="error-banner hidden"></div>
+
+        <!-- Results Table Container -->
+        <div class="results-container">
+          <div class="results-header">
+            <h3>Query Results</h3>
+            <span id="resultsCount" class="results-count">0 rows</span>
+          </div>
+          <div class="table-scroll" id="tableScrollWrapper">
+            <div id="emptyPlaceholder" class="empty-state">
+              <div class="empty-icon">📊</div>
+              <p>Execute a query above to view dynamic role-masked results.</p>
+            </div>
+            <table id="resultsTable" class="data-table hidden">
+              <thead id="resultsThead"></thead>
+              <tbody id="resultsTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <span>Smart Data Masking MVP · Demonstrating Application-Layer In-Flight Masking</span>
+      <span>Synthetic Test Records · No Raw PII Stored or Logged</span>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+

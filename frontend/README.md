@@ -1,28 +1,31 @@
-# Smart Data Masking frontend
+# Smart Data Masking — Security Operations Console
 
-A Streamlit dashboard for backend health, PII scans, and role-based query results.
+A lightweight, distinctive web-based Security Operations Console built with vanilla **HTML, CSS, and JavaScript** for the Smart Data Masking hackathon demo.
 
-## Setup
+---
 
-From the repository root, create and activate a virtual environment if desired, then install the minimal frontend dependencies:
+## Architecture & Features
 
+- **Live Gateway Health**: Polls `GET /health` to ensure the FastAPI query gateway and SQLite database are operational.
+- **PII Schema Radar**: Calls `GET /scan` to detect sensitive fields (`card_number`, `ssn`, `email`, `phone`, `salary`, `address`) and displays them as colored sensitivity tags.
+- **Role-Based Querying**: Calls `POST /query` with selectable roles (**Support**, **Analyst**, **Admin**) and displays masked results in a formatted data table.
+- **SQL Injection & Mutation Guard**: Attempts to run write operations (`DROP TABLE`, etc.) or chained queries are safely blocked and displayed with clear error banners.
+- **Quick Template Chips**: Instant test queries for cards, full PII profiles, and safe attack rejections.
+
+---
+
+## How to Run
+
+### 1. Ensure the Backend is Running
+From the project root:
 ```powershell
-python -m pip install streamlit requests pandas
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-## Run
-
-From the repository root:
-
+### 2. Serve the Frontend
+From the project root:
 ```powershell
-python -m streamlit run frontend/app.py
+python -m http.server 3000 --directory frontend
 ```
 
-The frontend expects the backend at `http://localhost:8000`. To use another base URL, set `MASKING_API_URL` before starting Streamlit, for example:
-
-```powershell
-$env:MASKING_API_URL = "http://localhost:8000"
-python -m streamlit run frontend/app.py
-```
-
-The app calls `GET /health`, `GET /scan`, and `POST /query` (with `role` and `sql` JSON fields). Since the `/scan` response schema is not specified yet, the Scan action displays the backend response as-is rather than assuming a shape.
+👉 Open in your browser: **[http://localhost:3000](http://localhost:3000)**

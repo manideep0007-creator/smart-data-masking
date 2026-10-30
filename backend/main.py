@@ -79,6 +79,20 @@ class QueryResponse(BaseModel):
 
 # --- Endpoints ---
 
+@app.get("/", summary="Root index")
+def root():
+    """Welcome index directing users to documentation and endpoints."""
+    return {
+        "service": "Smart Data Masking API",
+        "status": "online",
+        "documentation": "/docs",
+        "health": "/health",
+        "scan": "/scan",
+        "query": "/query (POST)",
+        "frontend_dashboard": "http://localhost:8501"
+    }
+
+
 @app.get("/health", response_model=HealthResponse, summary="Service health check")
 def health_check():
     """Verify that the API is active and the database connection is operational."""
