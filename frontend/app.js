@@ -35,6 +35,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const resultsTbody = document.getElementById('resultsTbody');
   const emptyPlaceholder = document.getElementById('emptyPlaceholder');
 
+  // Local demo credentials (in-memory, not exposed in DOM HTML attributes)
+  const DEMO_CREDENTIALS = {
+    'admin_anita': 'password123',
+    'support_ravi': 'password123',
+    'analyst_kavya': 'password123',
+    'admin': 'admin123',
+    'support': 'support123',
+    'analyst': 'analyst123',
+  };
+
   // Session State
   let currentAuthToken = null;
   let currentUser = null;
@@ -47,8 +57,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- Authentication System ---
-  async function authenticateAs(username, password, role) {
+  async function authenticateAs(username, role) {
     const baseUrl = getApiBaseUrl();
+    const password = DEMO_CREDENTIALS[username] || 'password123';
     try {
       const response = await fetch(`${baseUrl}/auth/login`, {
         method: 'POST',
@@ -83,8 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (radio) radio.checked = true;
 
     } catch (err) {
-      console.warn('Auto-login fallback:', err);
-      // Fallback to demo mode
+      console.warn('Auto-login fallback to unauthenticated demo mode:', err);
       currentAuthToken = null;
       authStatusChip.className = 'auth-status-chip unauth';
       authStatusLabel.textContent = `Demo Mode (${role})`;
@@ -95,9 +105,8 @@ document.addEventListener('DOMContentLoaded', () => {
   authPills.forEach(pill => {
     pill.addEventListener('click', () => {
       const username = pill.getAttribute('data-user');
-      const password = pill.getAttribute('data-pass');
       const role = pill.getAttribute('data-role');
-      authenticateAs(username, password, role);
+      authenticateAs(username, role);
     });
   });
 
@@ -188,7 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const columns = data.columns || [];
       const totalCols = data.total_columns || columns.length;
 
-      scanStatus.innerHTML = `✅ Successfully inspected table <strong>${data.table || 'customers'}</strong> (${totalCols} columns classified)`;
+      scanStatus.innerHTML = `✅ Successfully inspected table <strong>${escapeHtml(data.table || 'customers')}</strong> (${totalCols} columns classified)`;
 
       schemaBadgesList.innerHTML = '';
       columns.forEach(col => {
@@ -275,7 +284,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => bgScanBar.classList.add('hidden'), 4000);
       } else if (statusData.status === 'failed') {
         clearInterval(bgScanInterval);
-        bgScanLabel.textContent = `Scan failed: ${statusData.error || 'Unknown error'}`;
+        bgScanLabel.textContent = `Scan failed: ${statusData.error || 'Internal error'}`;
         bgScanBtn.disabled = false;
       } else {
         bgScanLabel.textContent = `Scanning schemas... (${pct}%)`;
@@ -434,7 +443,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Initial Startup ---
   checkHealth();
   // Auto authenticate as Support (Ravi) by default for realistic demo
-  authenticateAs('support_ravi', 'password123', 'Support').then(() => {
+  authenticateAs('support_ravi', 'Support').then(() => {
     scanSchema();
   });
 });

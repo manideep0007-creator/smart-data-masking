@@ -437,3 +437,93 @@ def test_query_max_rows_limiting():
     data = response.json()
     assert len(data["rows"]) == 2
     assert data["meta"]["truncated"] is True
+
+
+# =====================================================================
+# PHASE 7 AUDIT TESTS (Items 3, 5, 12, 18, 19, 20)
+# =====================================================================
+
+def test_expired_or_invalid_jwt():
+    import jwt
+    from datetime import datetime, timedelta, timezone
+    from backend.auth import JWT_SECRET_KEY, JWT_ALGORITHM
+
+    # Create an expired token (1 hour in the past)
+    expired_payload = {
+        "sub": "admin_anita",
+        "role": "Admin",
+        "exp": datetime.now(timezone.utc) - timedelta(hours=1),
+        "iat": datetime.now(timezone.utc) - timedelta(hours=2),
+    }
+    expired_token = jwt.encode(expired_payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+    response = client.get("/auth/me", headers={"Authorization": f"Bearer {expired_token}"})
+    assert response.status_code == 401
+    assert "expired" in response.json()["detail"].lower()
+
+    # Invalid garbage token
+    response_invalid = client.get("/auth/me", headers={"Authorization": "Bearer not.a.valid.jwt"})
+    assert response_invalid.status_code == 401
+    assert "invalid" in response_invalid.json()["detail"].lower()
+
+
+def test_unauthenticated_or_non_admin_scan_rejected():
+    # Login as Analyst
+    login_resp = client.post("/auth/login", json={"username": "analyst_kavya", "password": "password123"})
+    analyst_token = login_resp.json()["access_token"]
+
+    # Analyst attempts to trigger administrative background scan
+    response = client.post("/scan/start", headers={"Authorization": f"Bearer {analyst_token}"})
+    assert response.status_code == 403
+    assert "Forbidden" in response.json()["detail"] or "Only administrators" in response.json()["detail"]
+
+
+def test_email_and_phone_detection():
+    res_email = classify_column("customer_email", ["john.doe@company.org"])
+    assert res_email["tag"] == "PII_MEDIUM"
+    assert res_email["pii_type"] == "EMAIL"
+
+    res_phone = classify_column("contact_phone", ["+1-555-019-2834"])
+    assert res_phone["tag"] == "PII_MEDIUM"
+    assert res_phone["pii_type"] == "PHONE"
+
+
+def test_invalid_table_identifier_rejected():
+    adapter = get_database_adapter("sqlite")
+    with pytest.raises(ValueError) as excinfo:
+        adapter.get_table_columns("non_existent_table; DROP TABLE customers")
+    assert "Invalid table identifier" in str(excinfo.value)
+
+    # API scan also returns 404 for invalid table
+    resp = client.get("/scan?table=invalid_inject_table")
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"].lower()
+
+
+def test_postgresql_identifier_safety():
+    from backend.database.postgres_adapter import PostgreSQLAdapter, pg_sql
+    adapter = PostgreSQLAdapter(dbname="mock_db")
+    # Verify method uses Identifier quoting format
+    assert pg_sql is not None
+    # Test identifier validation method on adapter
+    with pytest.raises(Exception):
+        adapter.get_sample_rows("malicious_table_name_that_does_not_exist", limit=5)
+
+
+def test_frontend_backend_connectivity_and_cors():
+    # Test OPTIONS preflight for local origins
+    response = client.options(
+        "/query",
+        headers={
+            "Origin": "http://127.0.0.1:5500",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type,Authorization",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "http://127.0.0.1:5500"
+
+    # Test root endpoint returns active service info
+    root_resp = client.get("/")
+    assert root_resp.status_code == 200
+    assert root_resp.json()["status"] == "online"

@@ -5,9 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Smart Data Masking — Security Operations Console</title>
   <link rel="stylesheet" href="styles.css" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Offline-first fonts: fallbacks to local system fonts (Segoe UI, Consolas) if offline -->
 </head>
 <body>
   <div class="app-container">
@@ -37,13 +35,13 @@
     <div class="auth-ribbon">
       <div class="auth-persona-group">
         <span style="color: var(--text-muted); font-weight: 500;">🔐 Verified JWT Persona:</span>
-        <button class="auth-pill-btn" data-user="admin_anita" data-pass="password123" data-role="Admin" title="Anita Sharma - Platform Admin">
+        <button class="auth-pill-btn" data-user="admin_anita" data-role="Admin" title="Anita Sharma - Platform Admin">
           👑 Admin (Anita)
         </button>
-        <button class="auth-pill-btn active" data-user="support_ravi" data-pass="password123" data-role="Support" title="Ravi Kumar - Tier 2 Support">
+        <button class="auth-pill-btn active" data-user="support_ravi" data-role="Support" title="Ravi Kumar - Tier 2 Support">
           🎧 Support (Ravi)
         </button>
-        <button class="auth-pill-btn" data-user="analyst_kavya" data-pass="password123" data-role="Analyst" title="Kavya Iyer - Risk & BI Analyst">
+        <button class="auth-pill-btn" data-user="analyst_kavya" data-role="Analyst" title="Kavya Iyer - Risk & BI Analyst">
           📊 Analyst (Kavya)
         </button>
         <button id="demoModeBtn" class="auth-pill-btn" style="border-style: dashed;" title="Switch to unauthenticated demo mode">

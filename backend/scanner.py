@@ -42,8 +42,30 @@ class BackgroundScanner:
         with self._lock:
             return list(reversed(self._history[-limit:]))
 
-    def start_scan(self, table_name: Optional[str] = None) -> Dict[str, Any]:
-        """Trigger an asynchronous background scan."""
+    def start_scan(
+        self, table_name: Optional[str] = None, sample_limit: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Trigger an asynchronous background scan.
+        Validates target table against database before spawning thread.
+        Thread lock prevents race conditions or state corruption.
+        """
+        adapter = get_database_adapter()
+        available_tables = adapter.get_tables()
+
+        if table_name:
+            # Validate table existence
+            matched = [t for t in available_tables if t.lower() == table_name.lower()]
+            if not matched:
+                raise ValueError(
+                    f"Table '{table_name}' does not exist in database. Available: {', '.join(available_tables)}"
+                )
+            target_table = matched[0]
+        else:
+            target_table = None
+
+        safe_sample_limit = max(1, min(int(sample_limit), 100))
+
         with self._lock:
             if self._current_task and self._current_task.get("status") == "scanning":
                 return {
@@ -57,11 +79,12 @@ class BackgroundScanner:
             task_info = {
                 "task_id": task_id,
                 "status": "scanning",
-                "target_table": table_name or "all",
+                "target_table": target_table or "all",
+                "sample_limit": safe_sample_limit,
                 "progress_pct": 0,
                 "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "completed_at": None,
-                "tables_total": 0,
+                "tables_total": 1 if target_table else len(available_tables),
                 "tables_scanned": 0,
                 "columns_classified": 0,
                 "findings": [],
@@ -72,7 +95,7 @@ class BackgroundScanner:
         # Launch background worker thread
         thread = threading.Thread(
             target=self._run_scan_worker,
-            args=(task_id, table_name),
+            args=(task_id, target_table, safe_sample_limit),
             daemon=True,
         )
         thread.start()
@@ -80,16 +103,17 @@ class BackgroundScanner:
         return {
             "task_id": task_id,
             "status": "scanning",
-            "message": f"Background scan initiated for '{table_name or 'all tables'}'.",
+            "message": f"Background scan initiated for '{target_table or 'all tables'}'.",
         }
 
-    def _run_scan_worker(self, task_id: str, target_table: Optional[str] = None) -> None:
+    def _run_scan_worker(
+        self, task_id: str, target_table: Optional[str] = None, sample_limit: int = 10
+    ) -> None:
         """Worker executing schema discovery and classification."""
         logger.info(f"Background scanner starting task {task_id}")
         adapter = get_database_adapter()
 
         try:
-            # 1. Enumerate tables
             if target_table:
                 tables = [target_table]
             else:
@@ -104,9 +128,9 @@ class BackgroundScanner:
             all_findings = []
 
             for idx, table in enumerate(tables):
-                # Fetch columns and sample rows
+                # Fetch columns and bounded sample rows (avoid loading large tables into memory)
                 columns = adapter.get_table_columns(table)
-                sample_rows = adapter.get_sample_rows(table, limit=5)
+                sample_rows = adapter.get_sample_rows(table, limit=sample_limit)
 
                 table_classifications = []
                 for col_idx, col_name in enumerate(columns):
@@ -117,7 +141,7 @@ class BackgroundScanner:
                     table_classifications.append(classification)
                     total_columns += 1
 
-                # Update registry
+                # Update metadata registry
                 registry.register_table_scan(table, table_classifications)
                 all_findings.append({
                     "table": table,
@@ -133,7 +157,6 @@ class BackgroundScanner:
                         self._current_task["progress_pct"] = progress
                         self._current_task["columns_classified"] = total_columns
 
-                # Gentle yield to keep CPU usage low
                 time.sleep(0.01)
 
             # Mark completed
@@ -155,10 +178,9 @@ class BackgroundScanner:
                 if self._current_task and self._current_task["task_id"] == task_id:
                     self._current_task["status"] = "failed"
                     self._current_task["completed_at"] = now_iso
-                    self._current_task["error"] = str(exc)
+                    self._current_task["error"] = "Scanner internal error encountered."
                     self._history.append(dict(self._current_task))
 
 
 # Global scanner instance
 background_scanner = BackgroundScanner()
-

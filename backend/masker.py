@@ -5,15 +5,27 @@ import re
 from typing import Any, Dict, List, Optional
 
 from backend.detector import classify_column
+from backend.registry import registry
 
 VALID_ROLES = {"Admin", "Support", "Analyst"}
-HASH_SALT = os.getenv("MASKING_HASH_SALT", "pii-shield-deterministic-salt-2026").encode("utf-8")
+DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() in ("true", "1", "yes")
+
+_DEFAULT_DEV_SALT = "pii-shield-dev-salt-2026"
+_RAW_SALT = os.getenv("HASH_SALT") or os.getenv("MASKING_HASH_SALT") or _DEFAULT_DEV_SALT
+
+if not DEMO_MODE and (not _RAW_SALT or _RAW_SALT == _DEFAULT_DEV_SALT):
+    raise RuntimeError(
+        "CRITICAL SECURITY CONFIGURATION ERROR: Production mode (DEMO_MODE=false) requires an explicit, secure HASH_SALT environment variable."
+    )
+
+HASH_SALT = _RAW_SALT.encode("utf-8")
 
 
 def deterministic_hash(val: Any, prefix: str = "sha256:") -> str:
     """
-    Generate a deterministic, salted SHA-256 hash representation of a value.
+    Generate a deterministic, salted SHA-256 HMAC pseudonymized representation of a value.
     Preserves joinability and cardinality for analysts without exposing raw PII.
+    NOTE: This is pseudonymization, NOT irreversible anonymization.
     """
     if val is None:
         return ""
@@ -166,20 +178,35 @@ def mask_query_results(
     columns: List[str],
     rows: List[List[Any]],
     mask_strategy: str = "redact",
+    table_context: Optional[str] = None,
 ) -> List[List[Any]]:
     """
     Mask raw database rows in-memory according to the specified role.
+    Checks the PII metadata registry for pre-discovered classifications,
+    falling back seamlessly to dynamic heuristic inspection for aliases/expressions.
     Does not modify database records.
     """
     if role == "Admin":
         return rows
 
-    # Classify each column
+    # Resolve column classifications (combining registry cache + heuristic detector)
     column_classes = []
     for col_idx, col_name in enumerate(columns):
-        sample_vals = [r[col_idx] for r in rows[:5] if col_idx < len(r)]
-        col_info = classify_column(col_name, sample_vals)
-        column_classes.append(col_info)
+        sample_vals = [r[col_idx] for r in rows[:10] if col_idx < len(r)]
+
+        # Check registry first if table context is available or column is uniquely known
+        cached_meta = None
+        if table_context:
+            cached_meta = registry.get_column_classification(table_context, col_name)
+        if not cached_meta:
+            cached_meta = registry.find_column_classification(col_name)
+
+        if cached_meta and cached_meta.get("tag") != "PUBLIC":
+            column_classes.append(cached_meta)
+        else:
+            # Fall back to live heuristic analysis (detects aliases and expression outputs)
+            col_info = classify_column(col_name, sample_vals)
+            column_classes.append(col_info)
 
     masked_rows = []
     for row in rows:

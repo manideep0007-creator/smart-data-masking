@@ -18,7 +18,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
     """
     PostgreSQL adapter for PII Shield.
     Enforces driver/session-level read-only transactions, statement timeouts,
-    and safe cursor pagination.
+    safe Identifier quoting (psycopg.sql.Identifier), and safe cursor pagination.
     """
 
     def __init__(
@@ -139,7 +139,16 @@ class PostgreSQLAdapter(DatabaseAdapter):
         finally:
             conn.close()
 
+    def _validate_table_identifier(self, table: str) -> str:
+        """Validate table name against PostgreSQL public schema tables."""
+        known_tables = self.get_tables()
+        for t in known_tables:
+            if t.lower() == table.lower():
+                return t
+        raise ValueError(f"Invalid table identifier '{table}'. Table does not exist in database.")
+
     def get_table_columns(self, table: str) -> List[str]:
+        validated_table = self._validate_table_identifier(table)
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
@@ -150,18 +159,23 @@ class PostgreSQLAdapter(DatabaseAdapter):
                     WHERE table_schema = 'public' AND table_name = %s
                     ORDER BY ordinal_position;
                     """,
-                    (table,),
+                    (validated_table,),
                 )
                 return [row[0] for row in cur.fetchall()]
         finally:
             conn.close()
 
     def get_sample_rows(self, table: str, limit: int = 5) -> List[List[Any]]:
+        validated_table = self._validate_table_identifier(table)
+        safe_limit = max(1, min(int(limit), 100))
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
-                # Use parameterized or identifier quoting to avoid SQL injection on table name
-                cur.execute(f"SELECT * FROM {table} LIMIT {int(limit)}")
+                # Use psycopg.sql.Identifier to safely quote table identifier
+                query = pg_sql.SQL("SELECT * FROM {} LIMIT %s").format(
+                    pg_sql.Identifier(validated_table)
+                )
+                cur.execute(query, (safe_limit,))
                 return [list(r) for r in cur.fetchall()]
         finally:
             conn.close()

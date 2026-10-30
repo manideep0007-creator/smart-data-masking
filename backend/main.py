@@ -1,4 +1,5 @@
 import logging
+import os
 import sqlite3
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
@@ -9,11 +10,12 @@ from pydantic import BaseModel, Field
 from backend.auth import (
     DEMO_MODE,
     LoginRequest,
+    SafeUserItem,
     TokenResponse,
-    _INITIAL_USERS,
     authenticate_user,
     create_access_token,
     decode_access_token,
+    get_safe_user_list,
     resolve_auth_context,
 )
 from backend.database import get_database_adapter
@@ -38,7 +40,10 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("Customer database initialized with demo records.")
     # Run initial schema scan into registry in background
-    background_scanner.start_scan("customers")
+    try:
+        background_scanner.start_scan("customers")
+    except Exception as exc:
+        logger.warning(f"Initial schema scan skipped: {exc}")
     yield
 
 
@@ -49,13 +54,28 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Enable CORS for frontend integration
+# CORS: Restricted strictly to local demonstration frontend origins
+_LOCAL_ORIGINS = [
+    "http://127.0.0.1:5500",
+    "http://localhost:5500",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+]
+_EXTRA_ORIGINS = [
+    orig.strip()
+    for orig in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if orig.strip()
+]
+ALLOWED_ORIGINS = _LOCAL_ORIGINS + _EXTRA_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -153,20 +173,12 @@ def get_current_user_profile(authorization: Optional[str] = Header(None)):
     }
 
 
-@app.get("/auth/users", summary="List available demo user personas for evaluation")
+@app.get("/auth/users", summary="List available demo user personas for evaluation (passwords omitted)")
 def list_demo_users():
-    """Return preconfigured demo accounts for quick hackathon evaluator login."""
+    """Return configured demo accounts without exposing passwords or hashes."""
     return {
         "demo_mode_active": DEMO_MODE,
-        "users": [
-            {
-                "username": u["username"],
-                "full_name": u["full_name"],
-                "role": u["role"],
-                "demo_password": "password123" if "password123" in u["username"] or "anita" in u["username"] or "ravi" in u["username"] or "kavya" in u["username"] else f"{u['role'].lower()}123",
-            }
-            for u in _INITIAL_USERS.values()
-        ],
+        "users": get_safe_user_list(),
     }
 
 
@@ -239,14 +251,16 @@ def scan_schema(table: str = "customers"):
     adapter = get_database_adapter()
     tables = adapter.get_tables()
 
-    if table not in tables:
+    matched_tables = [t for t in tables if t.lower() == table.lower()]
+    if not matched_tables:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Table '{table}' not found in database.",
+            detail=f"Table '{table}' not found in database. Available tables: {', '.join(tables)}",
         )
+    actual_table = matched_tables[0]
 
-    col_names = adapter.get_table_columns(table)
-    sample_rows = adapter.get_sample_rows(table, limit=5)
+    col_names = adapter.get_table_columns(actual_table)
+    sample_rows = adapter.get_sample_rows(actual_table, limit=10)
 
     scan_items: List[ColumnScanItem] = []
     tag_to_sensitivity = {
@@ -272,10 +286,10 @@ def scan_schema(table: str = "customers"):
         )
 
     # Register into metadata registry
-    registry.register_table_scan(table, [item.model_dump() for item in scan_items])
+    registry.register_table_scan(actual_table, [item.model_dump() for item in scan_items])
 
     return ScanResponse(
-        table=table,
+        table=actual_table,
         total_columns=len(scan_items),
         columns=scan_items,
     )
@@ -284,22 +298,31 @@ def scan_schema(table: str = "customers"):
 @app.post("/scan/start", summary="Trigger an asynchronous background PII discovery scan")
 def trigger_background_scan(
     table: Optional[str] = Query(None, description="Optional specific table name to scan"),
+    sample_limit: Optional[int] = Query(10, description="Sample rows per table for heuristic evaluation"),
     authorization: Optional[str] = Header(None),
 ):
     """
     Trigger background scan without blocking ordinary queries.
-    Admin authorization recommended (or open in demo mode).
+    Admin authorization required (or allowed in DEMO_MODE).
     """
     auth_ctx = resolve_auth_context(authorization, requested_role="Admin")
     # Verify role permissions
     if auth_ctx.get("authenticated") and auth_ctx.get("role") != "Admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only administrators may trigger background schema scans.",
+            detail="Forbidden: Only administrators may trigger background schema scans.",
         )
 
-    result = background_scanner.start_scan(table_name=table)
-    return result
+    try:
+        result = background_scanner.start_scan(
+            table_name=table, sample_limit=sample_limit or 10
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
 
 
 @app.get("/scan/status", summary="Get status and progress of the background PII scanner")
@@ -361,7 +384,7 @@ def execute_query(
         logger.warning(f"Database error executing query: {exc}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Database execution error: {exc}"
+            detail="Database execution error: query was rejected by database engine or authorizer."
         )
     except Exception as exc:
         err_str = str(exc)

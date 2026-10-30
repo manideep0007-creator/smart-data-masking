@@ -25,7 +25,8 @@ def _sqlite_read_only_authorizer(
 class SQLiteAdapter(DatabaseAdapter):
     """
     SQLite adapter for PII Shield.
-    Enforces native read-only authorizer callbacks and safe cursor pagination.
+    Enforces native read-only authorizer callbacks, identifier validation against schema metadata,
+    and safe cursor pagination.
     """
 
     def __init__(self, db_path: str):
@@ -75,7 +76,6 @@ class SQLiteAdapter(DatabaseAdapter):
                 return [], [], {"rows_fetched": 0, "execution_ms": 0.0, "truncated": False}
 
             columns = [col[0] for col in description]
-            # Fetch at most max_rows + 1 to detect if truncation occurred
             raw_rows = cur.fetchmany(max_rows + 1)
             truncated = len(raw_rows) > max_rows
             if truncated:
@@ -104,30 +104,37 @@ class SQLiteAdapter(DatabaseAdapter):
         finally:
             conn.close()
 
+    def _validate_table_identifier(self, table: str) -> str:
+        """Validate table name against known database tables to prevent SQL injection."""
+        known_tables = self.get_tables()
+        for t in known_tables:
+            if t.lower() == table.lower():
+                return t
+        raise ValueError(f"Invalid table identifier '{table}'. Table does not exist in database.")
+
     def get_table_columns(self, table: str) -> List[str]:
+        validated_table = self._validate_table_identifier(table)
         conn = self._get_connection()
         try:
             cur = conn.cursor()
-            cur.execute(f"PRAGMA table_info('{table}')")
-            # PRAGMA returns (cid, name, type, notnull, dflt_value, pk)
-            return [row[1] for row in cur.fetchall()]
-        except Exception:
-            # Fallback using empty SELECT
-            cur = conn.cursor()
-            cur.execute(f"SELECT * FROM {table} LIMIT 0")
+            # Use read-only SELECT LIMIT 0 to extract column names via cursor.description
+            # avoiding PRAGMA operations which are restricted by read-only authorizer
+            cur.execute(f'SELECT * FROM "{validated_table}" LIMIT 0')
             return [col[0] for col in cur.description] if cur.description else []
         finally:
             conn.close()
 
     def get_sample_rows(self, table: str, limit: int = 5) -> List[List[Any]]:
+        validated_table = self._validate_table_identifier(table)
+        safe_limit = max(1, min(int(limit), 100))
         conn = self._get_connection()
         try:
             cur = conn.cursor()
-            cur.execute(f"SELECT * FROM {table} LIMIT {int(limit)}")
+            # Validated identifier with parameterized limit
+            cur.execute(f'SELECT * FROM "{validated_table}" LIMIT ?', (safe_limit,))
             return [list(r) for r in cur.fetchall()]
         finally:
             conn.close()
 
     def close(self) -> None:
         pass
-

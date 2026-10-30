@@ -6,28 +6,37 @@ import jwt
 from fastapi import Header, HTTPException, status
 from pydantic import BaseModel
 
-# Configuration (defaults to secure dev key if not provided via environment)
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "pii-shield-hackathon-secret-key-bfsi-2026-xyz987")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
+# Configuration
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() in ("true", "1", "yes")
 
-# Password hashing utilities
+_DEFAULT_DEV_SECRET = "dev-insecure-secret-key-change-in-production-bfsi-2026"
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", _DEFAULT_DEV_SECRET)
+
+if not DEMO_MODE and (not JWT_SECRET_KEY or JWT_SECRET_KEY == _DEFAULT_DEV_SECRET):
+    raise RuntimeError(
+        "CRITICAL SECURITY CONFIGURATION ERROR: Production mode (DEMO_MODE=false) requires an explicit, secure JWT_SECRET_KEY environment variable."
+    )
+
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
+
+
 def hash_password(password: str) -> str:
+    """Hash password securely using bcrypt."""
     salt = bcrypt.gensalt(rounds=10)
     return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify password securely against bcrypt hash."""
     try:
         return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
     except Exception:
         return False
 
 
-# In-memory user database seeded with benchmark personas
+# Benchmark demonstration personas (passwords hashed via bcrypt)
 _INITIAL_USERS: Dict[str, Dict[str, Any]] = {
-    # Official Saffron Bank benchmark personas
     "admin_anita": {
         "username": "admin_anita",
         "full_name": "Anita Sharma (Data Platform Lead)",
@@ -46,7 +55,6 @@ _INITIAL_USERS: Dict[str, Dict[str, Any]] = {
         "role": "Analyst",
         "password_hash": hash_password("password123"),
     },
-    # Convenience short usernames
     "admin": {
         "username": "admin",
         "full_name": "Administrator",
@@ -80,7 +88,7 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class UserProfile(BaseModel):
+class SafeUserItem(BaseModel):
     username: str
     full_name: str
     role: str
@@ -98,9 +106,15 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
 
 
 def decode_access_token(token: str) -> Dict[str, Any]:
-    """Decode and validate a JWT token, raising HTTPException if invalid or expired."""
+    """Decode and validate a JWT token, raising HTTPException if invalid, expired, or tampered."""
     try:
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        if "sub" not in payload or "role" not in payload:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Malformed token claims: missing subject or role.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(
@@ -124,6 +138,18 @@ def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
     if not verify_password(password, user["password_hash"]):
         return None
     return user
+
+
+def get_safe_user_list() -> List[Dict[str, str]]:
+    """Return user accounts WITHOUT exposing password hashes or credentials."""
+    return [
+        {
+            "username": u["username"],
+            "full_name": u["full_name"],
+            "role": u["role"],
+        }
+        for u in _INITIAL_USERS.values()
+    ]
 
 
 def resolve_auth_context(
@@ -171,4 +197,3 @@ def resolve_auth_context(
         detail="Authentication required. Please provide a valid Bearer token.",
         headers={"WWW-Authenticate": "Bearer"},
     )
-
