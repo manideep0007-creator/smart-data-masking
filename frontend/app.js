@@ -1248,10 +1248,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.target === judgeDemoModal) closeJudgeModal();
   });
 
-  // Close on Escape key
+  // Close on Escape key, or discretely open tour via F2 / Ctrl+Shift+D
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !judgeDemoModal.classList.contains('hidden')) {
       closeJudgeModal();
+    }
+    if ((e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd') || e.key === 'F2') {
+      e.preventDefault();
+      if (judgeDemoModal.classList.contains('hidden')) {
+        openJudgeModal(1);
+      } else {
+        closeJudgeModal();
+      }
     }
   });
 
