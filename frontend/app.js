@@ -5,11 +5,25 @@ document.addEventListener('DOMContentLoaded', () => {
   const statusText = document.getElementById('statusText');
   const dbEngineBadge = document.getElementById('dbEngineBadge');
 
-  // JWT Auth Elements
-  const authPills = document.querySelectorAll('.auth-pill-btn[data-user]');
-  const demoModeBtn = document.getElementById('demoModeBtn');
-  const authStatusChip = document.getElementById('authStatusChip');
-  const authStatusLabel = document.getElementById('authStatusLabel');
+  // Auth Screen Gating Elements
+  const authLoadingScreen = document.getElementById('authLoadingScreen');
+  const loginScreen = document.getElementById('loginScreen');
+  const loginForm = document.getElementById('loginForm');
+  const loginUsername = document.getElementById('loginUsername');
+  const loginPassword = document.getElementById('loginPassword');
+  const loginSubmitBtn = document.getElementById('loginSubmitBtn');
+  const loginErrorBanner = document.getElementById('loginErrorBanner');
+  const togglePasswordBtn = document.getElementById('togglePasswordBtn');
+  const eyeIcon = document.getElementById('eyeIcon');
+  const googleSsoBtn = document.getElementById('googleSsoBtn');
+  const facebookSsoBtn = document.getElementById('facebookSsoBtn');
+  const adminContactLink = document.getElementById('adminContactLink');
+  const cyberWaveCanvas = document.getElementById('cyberWaveCanvas');
+
+  const authenticatedApp = document.getElementById('authenticatedApp');
+  const sessionUsername = document.getElementById('sessionUsername');
+  const sessionRoleBadge = document.getElementById('sessionRoleBadge');
+  const logoutBtn = document.getElementById('logoutBtn');
 
   // Database Explorer & Table Selection Elements
   const dbExplorerList = document.getElementById('dbExplorerList');
@@ -65,101 +79,350 @@ document.addEventListener('DOMContentLoaded', () => {
   const resultsTbody = document.getElementById('resultsTbody');
   const emptyPlaceholder = document.getElementById('emptyPlaceholder');
 
-  // Local demo credentials (in-memory, not exposed in DOM HTML attributes)
-  const DEMO_CREDENTIALS = {
-    'admin_anita': 'password123',
-    'support_ravi': 'password123',
-    'analyst_kavya': 'password123',
-    'admin': 'admin123',
-    'support': 'support123',
-    'analyst': 'analyst123',
-  };
-
-  // Session State
-  let currentAuthToken = null;
-  let currentUser = null;
+  // Session State (Tokens are stored exclusively in HttpOnly cookies - SEC-01)
+  let currentUser = JSON.parse(sessionStorage.getItem('pii_shield_user') || 'null');
+  let currentCsrfToken = null;
   let bgScanInterval = null;
 
   function getApiBaseUrl() {
-    let url = apiUrlInput.value.trim();
-    if (!url) url = 'http://127.0.0.1:8000';
+    let url = apiUrlInput ? apiUrlInput.value.trim() : '';
+    if (!url || url === 'http://127.0.0.1:8000' || url === 'http://localhost:8000') {
+      const host = window.location.hostname || 'localhost';
+      return `http://${host}:8000`;
+    }
     return url.replace(/\/+$/, '');
   }
 
-  // --- Authentication System ---
-  async function authenticateAs(username, role) {
-    const baseUrl = getApiBaseUrl();
-    const password = DEMO_CREDENTIALS[username] || 'password123';
-    try {
-      const response = await fetch(`${baseUrl}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
+  function getCsrfToken() {
+    const match = document.cookie.match(new RegExp('(^| )csrf_token=([^;]+)'));
+    return match ? decodeURIComponent(match[2]) : currentCsrfToken;
+  }
 
-      if (!response.ok) {
-        throw new Error('Authentication failed');
-      }
+  // --- Screen Transitions ---
+  function showLoading() {
+    if (authLoadingScreen) authLoadingScreen.classList.remove('hidden');
+    if (loginScreen) loginScreen.classList.add('hidden');
+    if (authenticatedApp) authenticatedApp.classList.add('hidden');
+  }
 
-      const data = await response.json();
-      currentAuthToken = data.access_token;
-      currentUser = data.user;
+  function showLogin(errorMessage = null) {
+    if (authLoadingScreen) authLoadingScreen.classList.add('hidden');
+    if (loginScreen) loginScreen.classList.remove('hidden');
+    if (authenticatedApp) authenticatedApp.classList.add('hidden');
 
-      // Update Auth UI
-      authStatusChip.className = 'auth-status-chip';
-      authStatusLabel.textContent = `JWT: ${currentUser.username} (${currentUser.role.toUpperCase()})`;
+    if (errorMessage && loginErrorBanner) {
+      loginErrorBanner.textContent = errorMessage;
+      loginErrorBanner.classList.remove('hidden');
+    } else if (loginErrorBanner) {
+      loginErrorBanner.textContent = '';
+      loginErrorBanner.classList.add('hidden');
+    }
 
-      // Sync active persona pill
-      authPills.forEach(btn => {
-        if (btn.getAttribute('data-user') === username) {
-          btn.classList.add('active');
-        } else {
-          btn.classList.remove('active');
-        }
-      });
-      demoModeBtn.classList.remove('active');
-
-      // Sync radio button to match authenticated role
-      const radio = document.querySelector(`input[name="userRole"][value="${currentUser.role}"]`);
-      if (radio) radio.checked = true;
-
-    } catch (err) {
-      console.warn('Auto-login fallback to unauthenticated demo mode:', err);
-      currentAuthToken = null;
-      authStatusChip.className = 'auth-status-chip unauth';
-      authStatusLabel.textContent = `Demo Mode (${role})`;
+    if (loginUsername) {
+      setTimeout(() => loginUsername.focus(), 50);
     }
   }
 
-  // Persona Pill Click Listeners
-  authPills.forEach(pill => {
-    pill.addEventListener('click', () => {
-      const username = pill.getAttribute('data-user');
-      const role = pill.getAttribute('data-role');
-      authenticateAs(username, role);
-    });
-  });
+  function showDashboard(user) {
+    if (authLoadingScreen) authLoadingScreen.classList.add('hidden');
+    if (loginScreen) loginScreen.classList.add('hidden');
+    if (authenticatedApp) authenticatedApp.classList.remove('hidden');
 
-  // Demo Mode (Unauthenticated) Listener
-  demoModeBtn.addEventListener('click', () => {
-    currentAuthToken = null;
+    if (sessionUsername) sessionUsername.textContent = user.username;
+    if (sessionRoleBadge) {
+      sessionRoleBadge.textContent = user.role.toUpperCase();
+      sessionRoleBadge.className = `session-role-badge ${user.role.toLowerCase()}`;
+    }
+
+    // Role-specific control visibility: Only Admin can trigger async background scans
+    if (bgScanBtn) {
+      bgScanBtn.style.display = user.role === 'Admin' ? 'inline-flex' : 'none';
+    }
+
+    // Sync radio selector with authenticated role
+    const radio = document.querySelector(`input[name="userRole"][value="${user.role}"]`);
+    if (radio) radio.checked = true;
+
+    // Load protected data now that user is verified
+    checkHealth();
+    initDatabaseExplorer();
+    scanSchema('customers');
+  }
+
+  // --- Session Verification ---
+  async function checkAuthSession() {
+    showLoading();
+
+    // Check for auth error passed via query parameter (e.g. from OAuth callback error redirect)
+    const urlParams = new URLSearchParams(window.location.search);
+    const authError = urlParams.get('auth_error') || urlParams.get('error');
+    if (authError) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    const baseUrl = getApiBaseUrl();
+    try {
+      const res = await fetch(`${baseUrl}/auth/me`, { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        currentUser = {
+          username: data.username,
+          role: data.role,
+          full_name: data.full_name,
+          email: data.email
+        };
+        showDashboard(currentUser);
+        return;
+      }
+    } catch (e) {
+      console.warn('Auth check error:', e);
+    }
     currentUser = null;
-    authPills.forEach(p => p.classList.remove('active'));
-    demoModeBtn.classList.add('active');
-    authStatusChip.className = 'auth-status-chip unauth';
-    const selectedRoleEl = document.querySelector('input[name="userRole"]:checked');
-    const role = selectedRoleEl ? selectedRoleEl.value : 'Support';
-    authStatusLabel.textContent = `Anonymous Demo (${role})`;
-  });
+    showLogin(authError || null);
+    checkGoogleOauthStatus();
+  }
 
-  // Sync radio change with demo mode label if unauthenticated
-  document.querySelectorAll('input[name="userRole"]').forEach(radio => {
-    radio.addEventListener('change', () => {
-      if (!currentAuthToken) {
-        authStatusLabel.textContent = `Anonymous Demo (${radio.value})`;
+  // --- Google OAuth 2.0 Status & UI Integration ---
+  let googleOauthConfigured = false;
+
+  async function checkGoogleOauthStatus() {
+    const baseUrl = getApiBaseUrl();
+    try {
+      const resp = await fetch(`${baseUrl}/auth/google/status`, { credentials: 'include' });
+      if (resp.ok) {
+        const data = await resp.json();
+        googleOauthConfigured = !!data.enabled;
+        updateGoogleSsoUi(googleOauthConfigured);
+        return;
+      }
+    } catch (err) {
+      console.warn('Google OAuth status check failed:', err);
+    }
+    googleOauthConfigured = false;
+    updateGoogleSsoUi(false);
+  }
+
+  function updateGoogleSsoUi(isConfigured) {
+    const googleBadge = document.getElementById('googleSsoBadge');
+    if (!googleSsoBtn) return;
+
+    if (isConfigured) {
+      googleSsoBtn.classList.remove('sso-disabled');
+      googleSsoBtn.removeAttribute('aria-disabled');
+      googleSsoBtn.title = 'Sign in with your verified Google account';
+      if (googleBadge) {
+        googleBadge.textContent = 'OAuth 2.0';
+        googleBadge.className = 'sso-badge ready';
+      }
+    } else {
+      googleSsoBtn.setAttribute('aria-disabled', 'true');
+      googleSsoBtn.title = 'Google sign-in is not configured on this server. Contact your administrator.';
+      if (googleBadge) {
+        googleBadge.textContent = 'Google sign-in not configured';
+        googleBadge.className = 'sso-badge';
+      }
+    }
+  }
+
+  // --- Form & Button Event Handlers ---
+  if (loginForm) {
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = loginUsername.value.trim();
+      const password = loginPassword.value;
+      if (!username || !password) {
+        showLogin('Please enter both username and password.');
+        return;
+      }
+
+      if (loginSubmitBtn) {
+        loginSubmitBtn.disabled = true;
+        loginSubmitBtn.textContent = 'Signing in...';
+      }
+
+      const baseUrl = getApiBaseUrl();
+      try {
+        const response = await fetch(`${baseUrl}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ username, password })
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.detail || 'Authentication failed. Please verify credentials.');
+        }
+
+        const data = await response.json();
+        currentUser = data.user;
+        currentCsrfToken = data.csrf_token;
+        if (loginPassword) loginPassword.value = '';
+        showDashboard(currentUser);
+      } catch (err) {
+        currentUser = null;
+        showLogin(err.message || 'Login failed.');
+      } finally {
+        if (loginSubmitBtn) {
+          loginSubmitBtn.disabled = false;
+          loginSubmitBtn.textContent = 'Sign in';
+        }
       }
     });
-  });
+  }
+
+  // Password Show / Hide Eye Toggle
+  if (togglePasswordBtn && loginPassword) {
+    togglePasswordBtn.addEventListener('click', () => {
+      const isPassword = loginPassword.type === 'password';
+      loginPassword.type = isPassword ? 'text' : 'password';
+      togglePasswordBtn.setAttribute('aria-label', isPassword ? 'Hide password' : 'Show password');
+      if (eyeIcon) {
+        if (isPassword) {
+          // Eye with slash (hide)
+          eyeIcon.innerHTML = `
+            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+            <line x1="1" y1="1" x2="23" y2="23"></line>
+          `;
+        } else {
+          // Open eye (show)
+          eyeIcon.innerHTML = `
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          `;
+        }
+      }
+    });
+  }
+
+  // SSO & Admin Contact Handlers
+  if (googleSsoBtn) {
+    googleSsoBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!googleOauthConfigured) {
+        showLogin('Google sign-in is not configured on this server. Contact your administrator.');
+        return;
+      }
+      const baseUrl = getApiBaseUrl();
+      const googleBadge = document.getElementById('googleSsoBadge');
+      if (googleBadge) googleBadge.textContent = 'Redirecting...';
+      googleSsoBtn.setAttribute('aria-disabled', 'true');
+      googleSsoBtn.style.opacity = '0.75';
+      googleSsoBtn.style.cursor = 'wait';
+      window.location.href = `${baseUrl}/auth/google/login`;
+    });
+  }
+
+  if (facebookSsoBtn) {
+    facebookSsoBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      showLogin('Facebook sign-in is not supported. Please use enterprise credentials or Google authentication.');
+    });
+  }
+
+  if (adminContactLink) {
+    adminContactLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      showLogin('Account provisioning is managed by your system administrator. Please contact your IT Security department for credentials.');
+    });
+  }
+
+  // Cyber Particle Waves & Radial Rays Animation
+  function initCyberWaves() {
+    const canvas = document.getElementById('cyberWaveCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let width = (canvas.width = canvas.parentElement.offsetWidth || 500);
+    let height = (canvas.height = canvas.parentElement.offsetHeight || 550);
+
+    window.addEventListener('resize', () => {
+      if (canvas && canvas.parentElement) {
+        width = canvas.width = canvas.parentElement.offsetWidth || 500;
+        height = canvas.height = canvas.parentElement.offsetHeight || 550;
+      }
+    });
+
+    let time = 0;
+    const waveCount = 22;
+    const rayCount = 36;
+
+    function render() {
+      ctx.clearRect(0, 0, width, height);
+      const cx = width * 0.5;
+      const cy = height * 0.5;
+
+      // 1. Subtle Radial Background Rays
+      for (let r = 0; r < rayCount; r++) {
+        const angle = (r / rayCount) * Math.PI * 2 + time * 0.05;
+        const innerR = 140;
+        const outerR = Math.max(width, height) * 0.7;
+        const x1 = cx + Math.cos(angle) * innerR;
+        const y1 = cy + Math.sin(angle) * innerR;
+        const x2 = cx + Math.cos(angle) * outerR;
+        const y2 = cy + Math.sin(angle) * outerR;
+
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        const rayAlpha = (0.02 + 0.03 * Math.sin(r * 1.5 + time)) * (r % 2 === 0 ? 1 : 0.5);
+        ctx.strokeStyle = `rgba(0, 240, 255, ${rayAlpha})`;
+        ctx.lineWidth = r % 3 === 0 ? 1.5 : 0.8;
+        ctx.stroke();
+      }
+
+      // 2. Sweeping Quantum Particle Arcs & Wave Ribs
+      for (let w = 0; w < waveCount; w++) {
+        const phase = (w / waveCount) * Math.PI * 2;
+        const dotCount = 45;
+
+        for (let p = 0; p <= dotCount; p++) {
+          const t = p / dotCount;
+          const angle = phase + t * 2.8 + time * 0.2;
+          const radius = 100 + t * (Math.max(width, height) * 0.65) + Math.sin(t * 4 + phase) * 20;
+          const x = cx + Math.cos(angle) * radius * 1.15;
+          const y = cy + Math.sin(angle) * radius * 0.85;
+
+          const distNorm = radius / (Math.max(width, height) * 0.7);
+          const alpha = Math.max(0.02, Math.min(0.5, (1 - distNorm * 0.8) * Math.sin(t * Math.PI) * 0.6));
+
+          ctx.fillStyle = p % 3 === 0 ? `rgba(56, 189, 248, ${alpha})` : `rgba(0, 240, 255, ${alpha * 0.85})`;
+          ctx.beginPath();
+          ctx.arc(x, y, p % 5 === 0 ? 1.6 : 1.1, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      time += 0.005;
+      requestAnimationFrame(render);
+    }
+
+    render();
+  }
+
+  initCyberWaves();
+
+  // Logout Handler
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', async () => {
+      const baseUrl = getApiBaseUrl();
+      try {
+        const csrf = getCsrfToken();
+        const headers = csrf ? { 'X-CSRF-Token': csrf } : {};
+        await fetch(`${baseUrl}/auth/logout`, {
+          method: 'POST',
+          headers,
+          credentials: 'include'
+        });
+      } catch (e) {
+        console.warn('Logout API error:', e);
+      }
+      currentUser = null;
+      currentCsrfToken = null;
+      showLogin('You have been signed out safely.');
+    });
+  }
 
   // --- Health Check ---
   async function checkHealth() {
@@ -168,7 +431,7 @@ document.addEventListener('DOMContentLoaded', () => {
     statusText.textContent = 'Connecting...';
 
     try {
-      const response = await fetch(`${baseUrl}/health`, { method: 'GET' });
+      const response = await fetch(`${baseUrl}/health`, { method: 'GET', credentials: 'include' });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
 
@@ -199,7 +462,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!dbExplorerList) return;
     const baseUrl = getApiBaseUrl();
     try {
-      const response = await fetch(`${baseUrl}/database/info`);
+      const response = await fetch(`${baseUrl}/database/info`, { credentials: 'include' });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
 
@@ -293,12 +556,31 @@ document.addEventListener('DOMContentLoaded', () => {
     scanStatus.textContent = `Inspecting schema & heuristics for table "${tableToScan}"...`;
 
     try {
-      const headers = {};
-      if (currentAuthToken) headers['Authorization'] = `Bearer ${currentAuthToken}`;
+      const isUserAdmin = currentUser && currentUser.role === 'Admin';
+      if (!isUserAdmin) {
+        // Non-admin roles (Support, Analyst) receive sanitized schema summary (SEC-07)
+        const response = await fetch(`${baseUrl}/scan/summary`, {
+          method: 'GET',
+          credentials: 'include',
+        });
+        if (!response.ok) {
+          const errJson = await response.json().catch(() => ({}));
+          throw new Error(errJson.detail || `Summary failed (HTTP ${response.status})`);
+        }
+        const summaryData = await response.json();
+        scanStatus.innerHTML = `🛡️ <strong>Schema Summary</strong>: Table structures available. Detailed PII classification heuristics restricted to Admin.`;
+        schemaBadgesList.innerHTML = (summaryData.tables || []).map(t => `
+          <div class="schema-item">
+            <div class="schema-col-name">${escapeHtml(t.table)}</div>
+            <span class="schema-tag tag-public">${t.column_count} cols</span>
+          </div>
+        `).join('');
+        return;
+      }
 
       const response = await fetch(`${baseUrl}/scan?table=${encodeURIComponent(tableToScan)}`, {
         method: 'GET',
-        headers,
+        credentials: 'include',
       });
 
       if (!response.ok) {
@@ -363,12 +645,14 @@ document.addEventListener('DOMContentLoaded', () => {
     bgScanPct.textContent = '10%';
 
     try {
+      const csrf = getCsrfToken();
       const headers = {};
-      if (currentAuthToken) headers['Authorization'] = `Bearer ${currentAuthToken}`;
+      if (csrf) headers['X-CSRF-Token'] = csrf;
 
       const response = await fetch(`${baseUrl}/scan/start`, {
         method: 'POST',
         headers,
+        credentials: 'include',
       });
 
       if (!response.ok) {
@@ -390,7 +674,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function pollScanStatus() {
     const baseUrl = getApiBaseUrl();
     try {
-      const response = await fetch(`${baseUrl}/scan/status`);
+      const response = await fetch(`${baseUrl}/scan/status`, { credentials: 'include' });
       if (!response.ok) return;
       const statusData = await response.json();
 
@@ -441,9 +725,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const startTime = performance.now();
 
     try {
+      const csrf = getCsrfToken();
       const headers = { 'Content-Type': 'application/json' };
-      if (currentAuthToken) {
-        headers['Authorization'] = `Bearer ${currentAuthToken}`;
+      if (csrf) {
+        headers['X-CSRF-Token'] = csrf;
       }
 
       const payload = {
@@ -456,6 +741,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await fetch(`${baseUrl}/query`, {
         method: 'POST',
         headers: headers,
+        credentials: 'include',
         body: JSON.stringify(payload),
       });
 
@@ -762,8 +1048,7 @@ document.addEventListener('DOMContentLoaded', () => {
         scanStatus.textContent = 'Querying database metadata & sampling rows...';
 
         try {
-          const headers = currentAuthToken ? { 'Authorization': `Bearer ${currentAuthToken}` } : {};
-          const res = await fetch(`${baseUrl}/scan?table=customers`, { headers });
+          const res = await fetch(`${baseUrl}/scan?table=customers`, { credentials: 'include' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
           const cols = data.columns || [];
@@ -851,25 +1136,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
         await authenticateAs(username, role);
 
-        if (currentAuthToken) {
-          const claims = decodeJwtPayload(currentAuthToken) || {};
+        if (currentUser) {
           tokenBox.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem;">
-              <span style="font-weight: 700; color: #10b981;">✔ JWT Issued & Validated (HTTP 200 OK)</span>
-              <span style="font-size: 0.72rem; color: var(--text-muted);">Algorithm: HS256 · Expire: 480m</span>
+              <span style="font-weight: 700; color: #10b981;">✔ Authenticated via HttpOnly Secure Cookie (HTTP 200 OK)</span>
+              <span style="font-size: 0.72rem; color: var(--text-muted);">Session: Protected · CSRF Guard Active</span>
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; font-size: 0.78rem;">
               <div style="background: var(--bg-panel); padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border-color);">
                 <div style="color: var(--text-muted); font-size: 0.7rem;">AUTHENTICATED SUBJECT (sub)</div>
-                <div style="font-weight: 700; color: #ffffff;">${escapeHtml(claims.sub || username)} (${escapeHtml(claims.full_name || '')})</div>
+                <div style="font-weight: 700; color: #ffffff;">${escapeHtml(currentUser.username)} (${escapeHtml(currentUser.full_name || '')})</div>
               </div>
               <div style="background: var(--bg-panel); padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border-color);">
                 <div style="color: var(--text-muted); font-size: 0.7rem;">VERIFIED CRYPTOGRAPHIC ROLE</div>
-                <div style="font-weight: 700; color: var(--accent-cyan);">${escapeHtml(claims.role || role)}</div>
+                <div style="font-weight: 700; color: var(--accent-cyan);">${escapeHtml(currentUser.role)}</div>
               </div>
             </div>
             <div style="margin-top: 0.6rem; font-size: 0.72rem; color: var(--text-muted); font-family: var(--font-mono); word-break: break-all;">
-              Bearer Token: ${escapeHtml(currentAuthToken.slice(0, 32))}...${escapeHtml(currentAuthToken.slice(-16))}
+              Security: JWT isolated inside HttpOnly cookie (inaccessible to JavaScript / XSS proof)
             </div>
           `;
         } else {
@@ -958,10 +1242,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const sql = "SELECT c.customer_id, c.cust_nm, c.mob_no, c.emailid, k.pan_no, k.aadhaar_no FROM customers c JOIN kyc_records k ON c.customer_id = k.customer_id LIMIT 1;";
 
         async function fetchWithRole(user, role, strategy) {
-          const pass = DEMO_CREDENTIALS[user] || 'password123';
+          const pass = 'password123';
           const loginRes = await fetch(`${baseUrl}/auth/login`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Auth-Mode': 'api' },
             body: JSON.stringify({ username: user, password: pass }),
           });
           const loginData = await loginRes.json();
@@ -1079,9 +1363,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const results = [];
         for (const tc of testCases) {
           try {
+            const csrf = getCsrfToken();
+            const headers = { 'Content-Type': 'application/json' };
+            if (csrf) headers['X-CSRF-Token'] = csrf;
+
             const res = await fetch(`${baseUrl}/query`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers,
+              credentials: 'include',
               body: JSON.stringify({ role: 'Support', sql: tc.sql })
             });
 
@@ -1191,10 +1480,10 @@ document.addEventListener('DOMContentLoaded', () => {
         statusText.textContent = 'Fetching unmasked record #1 from SQLite...';
 
         try {
-          const pass = DEMO_CREDENTIALS['admin_anita'] || 'password123';
+          const pass = 'password123';
           const loginRes = await fetch(`${baseUrl}/auth/login`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Auth-Mode': 'api' },
             body: JSON.stringify({ username: 'admin_anita', password: pass }),
           });
           const loginData = await loginRes.json();
@@ -1414,43 +1703,12 @@ document.addEventListener('DOMContentLoaded', () => {
       closeJudgeModal();
       sqlInput.value = 'SELECT c.customer_id, c.cust_nm, c.mob_no, c.emailid, a.account_no, a.acct_type, a.curr_bal FROM customers c JOIN accounts a ON c.customer_id = a.customer_id LIMIT 10';
       if (maskStrategySelect) maskStrategySelect.value = 'redact';
-      await authenticateAs('support_ravi', 'Support');
-      runQuery();
+      if (currentUser) {
+        runQuery();
+      }
     });
   }
 
-  // --- Initial Startup ---
-  checkHealth();
-  initDatabaseExplorer();
-  // Auto authenticate as Support (Ravi) by default for realistic demo
-  authenticateAs('support_ravi', 'Support').then(() => {
-    scanSchema('customers');
-
-    // Automation / URL Parameter Hooks for evaluation & screenshots
-    const urlParams = new URLSearchParams(window.location.search);
-    const demoMode = urlParams.get('demo');
-    if (demoMode === 'support') {
-      setTimeout(() => runQuery(), 400);
-    } else if (demoMode === 'analyst') {
-      setTimeout(() => {
-        authenticateAs('analyst_kavya', 'Analyst').then(() => {
-          if (maskStrategySelect) maskStrategySelect.value = 'hash';
-          runQuery();
-        });
-      }, 400);
-    } else if (demoMode === 'cards') {
-      setTimeout(() => {
-        scanSchema('cards');
-        if (TABLE_DEFAULT_QUERIES['cards']) {
-          sqlInput.value = TABLE_DEFAULT_QUERIES['cards'];
-        }
-        runQuery();
-      }, 400);
-    } else if (demoMode === 'attack') {
-      setTimeout(() => {
-        sqlInput.value = 'DROP TABLE customers';
-        runQuery();
-      }, 400);
-    }
-  });
+  // --- Initial Startup: Verify Authentication Gate ---
+  checkAuthSession();
 });

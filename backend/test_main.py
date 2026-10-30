@@ -3,8 +3,33 @@ import pytest
 from fastapi.testclient import TestClient
 from backend.main import app
 from backend.db import DEFAULT_DB_PATH, init_db
+from backend.auth import create_access_token
+from backend.auth_db import init_auth_db
+
+init_auth_db()
 
 client = TestClient(app)
+
+_orig_request = client.request
+
+def _auth_request(method, url, *args, **kwargs):
+    headers = kwargs.get("headers")
+    if headers is None:
+        headers = {}
+        kwargs["headers"] = headers
+
+    if "Authorization" in headers and headers["Authorization"] is None:
+        del headers["Authorization"]
+    elif "Authorization" not in headers and url != "/auth/me":
+        json_data = kwargs.get("json") or {}
+        role = json_data.get("role", "Admin" if "/scan" in url else "Support")
+        username = "admin_anita" if role == "Admin" else ("analyst_kavya" if role == "Analyst" else "support_ravi")
+        token = create_access_token({"sub": username, "role": role})
+        headers["Authorization"] = f"Bearer {token}"
+
+    return _orig_request(method, url, *args, **kwargs)
+
+client.request = _auth_request
 
 
 @pytest.fixture(autouse=True)
@@ -12,6 +37,15 @@ def setup_database(monkeypatch):
     """Ensure database is seeded before each test and runs against demo db for legacy test assertions."""
     monkeypatch.setenv("DB_PATH", DEFAULT_DB_PATH)
     init_db(DEFAULT_DB_PATH)
+    client.cookies.clear()
+    conn = sqlite3.connect("data/auth.db")
+    try:
+        conn.execute("DELETE FROM ip_login_attempts")
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
 
 
 def test_health_endpoint():
@@ -284,8 +318,12 @@ def test_auth_login_invalid_password():
 
 
 def test_auth_me_endpoint_with_valid_token():
-    # Login to get token
-    login_resp = client.post("/auth/login", json={"username": "support_ravi", "password": "password123"})
+    # Login to get token via API mode
+    login_resp = client.post(
+        "/auth/login",
+        json={"username": "support_ravi", "password": "password123"},
+        headers={"X-Auth-Mode": "api"},
+    )
     token = login_resp.json()["access_token"]
 
     response = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
@@ -301,7 +339,9 @@ def test_auth_me_missing_token_rejected():
 
 
 def test_auth_users_list_endpoint():
-    response = client.get("/auth/users")
+    # Admin authorization required (SEC-02)
+    admin_token = create_access_token({"sub": "admin_anita", "role": "Admin"})
+    response = client.get("/auth/users", headers={"Authorization": f"Bearer {admin_token}"})
     assert response.status_code == 200
     data = response.json()
     assert "users" in data
@@ -318,8 +358,12 @@ def test_server_side_rbac_overrides_frontend_role_tampering():
     in the JSON body, the gateway MUST derive the role from the verified JWT
     and enforce Analyst redaction.
     """
-    # 1. Obtain Analyst token
-    login_resp = client.post("/auth/login", json={"username": "analyst_kavya", "password": "password123"})
+    # 1. Obtain Analyst token via API mode
+    login_resp = client.post(
+        "/auth/login",
+        json={"username": "analyst_kavya", "password": "password123"},
+        headers={"X-Auth-Mode": "api"},
+    )
     analyst_token = login_resp.json()["access_token"]
 
     # 2. Submit query with fake 'Admin' role in JSON payload
@@ -469,8 +513,12 @@ def test_expired_or_invalid_jwt():
 
 
 def test_unauthenticated_or_non_admin_scan_rejected():
-    # Login as Analyst
-    login_resp = client.post("/auth/login", json={"username": "analyst_kavya", "password": "password123"})
+    # Login as Analyst via API mode
+    login_resp = client.post(
+        "/auth/login",
+        json={"username": "analyst_kavya", "password": "password123"},
+        headers={"X-Auth-Mode": "api"},
+    )
     analyst_token = login_resp.json()["access_token"]
 
     # Analyst attempts to trigger administrative background scan
