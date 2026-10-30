@@ -19,6 +19,9 @@
         </div>
       </div>
       <div class="header-controls">
+        <button id="startJudgeDemoBtn" class="btn btn-judge-demo" title="Open Interactive Judge Demonstration Guided Tour">
+          ⭐ START JUDGE DEMO
+        </button>
         <div class="api-config">
           <label for="apiUrlInput">Gateway API:</label>
           <input type="text" id="apiUrlInput" value="http://127.0.0.1:8000" />
@@ -30,6 +33,21 @@
         </div>
       </div>
     </header>
+
+    <!-- Quick Demonstration Controls Bar -->
+    <div class="demo-toolbar">
+      <div class="demo-toolbar-left">
+        <span class="demo-toolbar-label">⚡ Demo Controls:</span>
+        <button id="quickJudgeDemoBtn" class="btn btn-demo-gold">⭐ Start Judge Demo</button>
+        <button id="quickScanBtn" class="btn btn-demo-action">🔍 Scan Database</button>
+        <button id="quickTestSecurityBtn" class="btn btn-demo-danger">🛡️ Test Database Protection</button>
+        <button id="quickVerifyDataBtn" class="btn btn-demo-success">💾 Verify Original Data</button>
+        <button id="quickResetBtn" class="btn btn-demo-ghost">🔄 Reset Demo View</button>
+      </div>
+      <div class="demo-toolbar-right">
+        <span class="offline-pill">🟢 100% Offline Reliable</span>
+      </div>
+    </div>
 
     <!-- JWT Authentication & Session Ribbon -->
     <div class="auth-ribbon">
@@ -196,6 +214,46 @@
       <span>Smart Data Masking MVP · Demonstrating Application-Layer In-Flight Masking</span>
       <span>Synthetic Test Records · No Raw PII Stored or Logged</span>
     </footer>
+  </div>
+
+  <!-- Judge Demo Modal Backdrop -->
+  <div id="judgeDemoModal" class="judge-modal-backdrop hidden">
+    <div class="judge-modal-container">
+      <!-- Modal Header -->
+      <div class="judge-modal-header">
+        <div class="judge-title-area">
+          <div class="judge-badge">HACKATHON EVALUATION MODE</div>
+          <h2>🛡️ PII Shield – Live Judge Demonstration</h2>
+          <p class="judge-subtitle">Guided step-by-step verification on local offline FastAPI gateway & SQLite engine</p>
+        </div>
+        <button id="closeJudgeModalBtn" class="judge-close-btn" title="Close Modal">&times;</button>
+      </div>
+
+      <!-- Stage Navigation Stepper -->
+      <div class="judge-stepper" id="judgeStepper">
+        <button class="step-btn active" data-stage="1"><span class="step-num">1</span> Overview</button>
+        <button class="step-btn" data-stage="2"><span class="step-num">2</span> PII Discovery</button>
+        <button class="step-btn" data-stage="3"><span class="step-num">3</span> Cryptographic RBAC</button>
+        <button class="step-btn" data-stage="4"><span class="step-num">4</span> Live Masking</button>
+        <button class="step-btn" data-stage="5"><span class="step-num">5</span> SQL Protection</button>
+        <button class="step-btn" data-stage="6"><span class="step-num">6</span> Zero Mutation</button>
+        <button class="step-btn" data-stage="7"><span class="step-num">7</span> Architecture</button>
+      </div>
+
+      <!-- Stage Content Dynamic Viewport -->
+      <div id="judgeStageContent" class="judge-stage-content">
+        <!-- Content injected dynamically via app.js renderJudgeStage() -->
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="judge-modal-footer">
+        <button id="judgePrevBtn" class="btn btn-secondary" disabled>◄ Previous Stage</button>
+        <div class="judge-progress-indicator">
+          <span id="judgeStageIndicator">Stage 1 of 7</span>
+        </div>
+        <button id="judgeNextBtn" class="btn btn-primary">Next Stage: PII Discovery ►</button>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>

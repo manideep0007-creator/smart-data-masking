@@ -1,0 +1,535 @@
+[
+  {
+    "test_name": "P1.1 Backend Health Endpoint",
+    "phase": "Connectivity",
+    "expected": "HTTP 200, status: ok, database: connected",
+    "actual": "HTTP 200, status: ok, latency: 62.9ms",
+    "status": "PASS",
+    "evidence": {
+      "status": "ok",
+      "database": "connected",
+      "engine": "sqlite",
+      "version": "2.0.0"
+    }
+  },
+  {
+    "test_name": "P1.2 Database Engine Info",
+    "phase": "Connectivity",
+    "expected": "HTTP 200, engine: sqlite, tables include 'customers'",
+    "actual": "HTTP 200, engine: sqlite",
+    "status": "PASS",
+    "evidence": {
+      "connection": {
+        "status": "connected",
+        "engine": "sqlite",
+        "database": "customers.db",
+        "latency_ms": 1.9,
+        "read_only_guard": "sqlite_authorizer_active"
+      },
+      "tables": [
+        "customers"
+      ],
+      "total_tables": 1
+    }
+  },
+  {
+    "test_name": "P1.3 Frontend Static Server",
+    "phase": "Connectivity",
+    "expected": "HTTP 200, serves index.html with 'Smart Data Masking'",
+    "actual": "HTTP 200, latency: 12.6ms, html_bytes: 11942",
+    "status": "PASS",
+    "evidence": {
+      "content_preview": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, "
+    }
+  },
+  {
+    "test_name": "P1.4 Frontend Asset Bundles (CSS/JS)",
+    "phase": "Connectivity",
+    "expected": "HTTP 200 for styles.css and app.js",
+    "actual": "styles.css: HTTP 200, app.js: HTTP 200",
+    "status": "PASS",
+    "evidence": {
+      "css_status": 200,
+      "js_status": 200
+    }
+  },
+  {
+    "test_name": "P2.1 Login as Admin (admin_anita)",
+    "phase": "Authentication",
+    "expected": "HTTP 200, JWT token returned, role == 'Admin'",
+    "actual": "HTTP 200, role: Admin, latency: 141.6ms",
+    "status": "PASS",
+    "evidence": {
+      "role": "Admin",
+      "token_type": "bearer"
+    }
+  },
+  {
+    "test_name": "P2.1 Login as Support (support_ravi)",
+    "phase": "Authentication",
+    "expected": "HTTP 200, JWT token returned, role == 'Support'",
+    "actual": "HTTP 200, role: Support, latency: 148.3ms",
+    "status": "PASS",
+    "evidence": {
+      "role": "Support",
+      "token_type": "bearer"
+    }
+  },
+  {
+    "test_name": "P2.1 Login as Analyst (analyst_kavya)",
+    "phase": "Authentication",
+    "expected": "HTTP 200, JWT token returned, role == 'Analyst'",
+    "actual": "HTTP 200, role: Analyst, latency: 140.2ms",
+    "status": "PASS",
+    "evidence": {
+      "role": "Analyst",
+      "token_type": "bearer"
+    }
+  },
+  {
+    "test_name": "P2.4 Invalid Credentials Rejection",
+    "phase": "Authentication",
+    "expected": "HTTP 401 Unauthorized",
+    "actual": "HTTP 401, detail: Invalid username or password.",
+    "status": "PASS",
+    "evidence": {
+      "detail": "Invalid username or password."
+    }
+  },
+  {
+    "test_name": "P2.5 /auth/me Token Verification",
+    "phase": "Authentication",
+    "expected": "HTTP 200, verified user: support_ravi, role: Support",
+    "actual": "HTTP 200, user: support_ravi",
+    "status": "PASS",
+    "evidence": {
+      "username": "support_ravi",
+      "role": "Support",
+      "full_name": "Ravi Kumar (Customer Support Tier 2)",
+      "issued_at": 1793368790,
+      "expires_at": 1793397590
+    }
+  },
+  {
+    "test_name": "P2.6 Corrupted JWT Token Rejection",
+    "phase": "Authentication",
+    "expected": "HTTP 401 Unauthorized",
+    "actual": "HTTP 401, detail: Invalid authentication token: Invalid payload padding",
+    "status": "PASS",
+    "evidence": {
+      "detail": "Invalid authentication token: Invalid payload padding"
+    }
+  },
+  {
+    "test_name": "P2.7 Privilege Escalation Tampering Guard",
+    "phase": "Authentication / RBAC",
+    "expected": "Server-side JWT overrides body role 'Admin', enforces Analyst redaction",
+    "actual": "HTTP 200, role_applied: Analyst, card_cell: [REDACTED]",
+    "status": "PASS",
+    "evidence": {
+      "columns": [
+        "name",
+        "card_number"
+      ],
+      "rows": [
+        [
+          "[REDACTED]",
+          "[REDACTED]"
+        ]
+      ],
+      "meta": {
+        "role_applied": "Analyst",
+        "auth_source": "jwt_verified",
+        "mask_strategy": "redact",
+        "rows_returned": 1,
+        "execution_ms": 5.36,
+        "truncated": false
+      }
+    }
+  },
+  {
+    "test_name": "P2.8 Administrative Endpoint Role Protection (/scan/start)",
+    "phase": "Authentication / RBAC",
+    "expected": "HTTP 403 Forbidden when invoked by non-Admin",
+    "actual": "HTTP 403, detail: Forbidden: Only administrators may trigger background schema scans.",
+    "status": "PASS",
+    "evidence": {
+      "detail": "Forbidden: Only administrators may trigger background schema scans."
+    }
+  },
+  {
+    "test_name": "P2.9 Safe User Persona Listing (No Passwords Leaked)",
+    "phase": "Authentication",
+    "expected": "HTTP 200, users list contains username and role with ZERO plaintext passwords or hashes",
+    "actual": "HTTP 200, total_users: 6, passwords_exposed: False",
+    "status": "PASS",
+    "evidence": {
+      "users_sample": [
+        {
+          "username": "admin_anita",
+          "full_name": "Anita Sharma (Data Platform Lead)",
+          "role": "Admin"
+        },
+        {
+          "username": "support_ravi",
+          "full_name": "Ravi Kumar (Customer Support Tier 2)",
+          "role": "Support"
+        }
+      ]
+    }
+  },
+  {
+    "test_name": "P3.1 Schema PII Radar Detection (customers table)",
+    "phase": "PII Discovery",
+    "expected": "All 8 columns correctly categorized with appropriate sensitivity tiers",
+    "actual": "HTTP 200, total_columns: 8, matched: True",
+    "status": "PASS",
+    "evidence": {
+      "details": [
+        "card_number: tag=FINANCIAL_CONFIDENTIAL (expected FINANCIAL_CONFIDENTIAL)",
+        "ssn: tag=PII_HIGH (expected PII_HIGH)",
+        "email: tag=PII_MEDIUM (expected PII_MEDIUM)",
+        "phone: tag=PII_MEDIUM (expected PII_MEDIUM)",
+        "salary: tag=FINANCIAL_CONFIDENTIAL (expected FINANCIAL_CONFIDENTIAL)",
+        "address: tag=PII_MEDIUM (expected PII_MEDIUM)",
+        "name: tag=PII_LOW (expected PII_LOW)",
+        "id: tag=PUBLIC (expected PUBLIC)"
+      ],
+      "scan_latency_ms": 29.56209995318204
+    }
+  },
+  {
+    "test_name": "P3.2 Indian BFSI Identifiers Detection (Aadhaar & PAN)",
+    "phase": "PII Discovery",
+    "expected": "Aadhaar classified as PII_HIGH / AADHAAR; PAN classified as PII_HIGH / PAN",
+    "actual": "Aadhaar tag=PII_HIGH type=AADHAAR, PAN tag=PII_HIGH type=PAN",
+    "status": "PASS",
+    "evidence": {
+      "aadhaar": {
+        "name": "aadhaar_no",
+        "tag": "PII_HIGH",
+        "pii_type": "AADHAAR",
+        "confidence": "HIGH",
+        "heuristic": "Column name matches Indian Aadhaar / UIDAI identifier"
+      },
+      "pan": {
+        "name": "pan_no",
+        "tag": "PII_HIGH",
+        "pii_type": "PAN",
+        "confidence": "HIGH",
+        "heuristic": "Column name matches Indian Permanent Account Number (PAN)"
+      }
+    }
+  },
+  {
+    "test_name": "P3.3 Additional PII Types (DOB & Driving License)",
+    "phase": "PII Discovery",
+    "expected": "DOB detected as DATE_OF_BIRTH; Driving License detected as PII_HIGH",
+    "actual": "DOB: DATE_OF_BIRTH, DL: PII_HIGH",
+    "status": "PASS",
+    "evidence": {
+      "dob": {
+        "name": "dob_dt",
+        "tag": "PII_MEDIUM",
+        "pii_type": "DATE_OF_BIRTH",
+        "confidence": "HIGH",
+        "heuristic": "Column name matches date of birth"
+      },
+      "dl": {
+        "name": "driving_license",
+        "tag": "PII_HIGH",
+        "pii_type": "GOVERNMENT_ID",
+        "confidence": "HIGH",
+        "heuristic": "Column name matches government-issued personal identifier"
+      }
+    }
+  },
+  {
+    "test_name": "P4.1 Role Masking: Admin (Full Raw Access)",
+    "phase": "Dynamic Masking",
+    "expected": "id=1, name='Asha', card='4111-2222-3333-1111', ssn='123-45-6789', email='asha@example.com', salary=85000.0",
+    "actual": "HTTP 200, row=[1, 'Asha', '4111-2222-3333-1111', '123-45-6789', 'asha@example.com', 85000.0]",
+    "status": "PASS",
+    "evidence": [
+      1,
+      "Asha",
+      "4111-2222-3333-1111",
+      "123-45-6789",
+      "asha@example.com",
+      85000.0
+    ]
+  },
+  {
+    "test_name": "P4.2 Role Masking: Support (Partial Masking & Name Preserved)",
+    "phase": "Dynamic Masking",
+    "expected": "name='Asha', card='4111-XXXX-XXXX-1111', ssn='XXX-XX-6789', email='a***@example.com', salary='[CONFIDENTIAL]'",
+    "actual": "HTTP 200, row=[1, 'Asha', '4111-XXXX-XXXX-1111', 'XXX-XX-6789', 'a***@example.com', '[CONFIDENTIAL]']",
+    "status": "PASS",
+    "evidence": [
+      1,
+      "Asha",
+      "4111-XXXX-XXXX-1111",
+      "XXX-XX-6789",
+      "a***@example.com",
+      "[CONFIDENTIAL]"
+    ]
+  },
+  {
+    "test_name": "P4.3 Role Masking: Analyst Redaction",
+    "phase": "Dynamic Masking",
+    "expected": "id=1 (readable), name/card/ssn/email/salary all '[REDACTED]'",
+    "actual": "HTTP 200, row=[1, '[REDACTED]', '[REDACTED]', '[REDACTED]', '[REDACTED]', '[REDACTED]']",
+    "status": "PASS",
+    "evidence": [
+      1,
+      "[REDACTED]",
+      "[REDACTED]",
+      "[REDACTED]",
+      "[REDACTED]",
+      "[REDACTED]"
+    ]
+  },
+  {
+    "test_name": "P4.4 Role Masking: Analyst Deterministic Pseudonymization (Hash)",
+    "phase": "Dynamic Masking",
+    "expected": "id=1 (readable), sensitive cells output 'sha256:12char' tokens",
+    "actual": "HTTP 200, row=[1, 'sha256:c92641ccf3c4', 'sha256:6b2079b1773f', 'sha256:26fb38ec38c5', 'sha256:892c2a54723b', 'sha256:49f74f683ac5']",
+    "status": "PASS",
+    "evidence": [
+      1,
+      "sha256:c92641ccf3c4",
+      "sha256:6b2079b1773f",
+      "sha256:26fb38ec38c5",
+      "sha256:892c2a54723b",
+      "sha256:49f74f683ac5"
+    ]
+  },
+  {
+    "test_name": "P5.1 Deterministic Hash Reproducibility",
+    "phase": "Hashing Validation",
+    "expected": "Subsequent query on same input returns exactly identical sha256 tokens",
+    "actual": "Identical: True, hash_sample: sha256:6b2079b1773f",
+    "status": "PASS",
+    "evidence": {
+      "original": [
+        1,
+        "sha256:c92641ccf3c4",
+        "sha256:6b2079b1773f",
+        "sha256:26fb38ec38c5",
+        "sha256:892c2a54723b",
+        "sha256:49f74f683ac5"
+      ],
+      "repeat": [
+        1,
+        "sha256:c92641ccf3c4",
+        "sha256:6b2079b1773f",
+        "sha256:26fb38ec38c5",
+        "sha256:892c2a54723b",
+        "sha256:49f74f683ac5"
+      ]
+    }
+  },
+  {
+    "test_name": "P5.2 Hash Collision Resistance on Distinct Inputs",
+    "phase": "Hashing Validation",
+    "expected": "Different card numbers produce different HMAC-SHA256 digests",
+    "actual": "Card 1 hash: sha256:6b2079b1773f != Card 2 hash: sha256:dd29122bbcc8",
+    "status": "PASS",
+    "evidence": {
+      "card1": "sha256:6b2079b1773f",
+      "card2": "sha256:dd29122bbcc8"
+    }
+  },
+  {
+    "test_name": "P6.1 SQL Security & Injection Prevention (13 attack vectors)",
+    "phase": "SQL Security",
+    "expected": "All 13 write, DDL, comment, multi-statement, and malformed queries rejected with HTTP 400",
+    "actual": "All rejected: True, rejected count: 13/13",
+    "status": "PASS",
+    "evidence": [
+      "DROP command blocked: HTTP 400 (REJECTED)",
+      "DELETE command blocked: HTTP 400 (REJECTED)",
+      "UPDATE command blocked: HTTP 400 (REJECTED)",
+      "INSERT command blocked: HTTP 400 (REJECTED)",
+      "ALTER command blocked: HTTP 400 (REJECTED)",
+      "CREATE command blocked: HTTP 400 (REJECTED)",
+      "TRUNCATE command blocked: HTTP 400 (REJECTED)",
+      "ATTACH command blocked: HTTP 400 (REJECTED)",
+      "Multiple statement semicolon blocked: HTTP 400 (REJECTED)",
+      "SQL comment (--) blocked: HTTP 400 (REJECTED)",
+      "SQL block comment (/* */) blocked: HTTP 400 (REJECTED)",
+      "Non-existent table rejected cleanly: HTTP 400 (REJECTED)",
+      "Syntax error rejected cleanly: HTTP 400 (REJECTED)"
+    ]
+  },
+  {
+    "test_name": "P7.1 SQL Aliasing Masking Resilience (cn, s_id, primary_contact)",
+    "phase": "Advanced Masking",
+    "expected": "Card, SSN, and Email masked properly despite arbitrary column alias names",
+    "actual": "HTTP 200, aliased row=['4111-XXXX-XXXX-1111', 'XXX-XX-6789', 'a***@example.com']",
+    "status": "PASS",
+    "evidence": [
+      "4111-XXXX-XXXX-1111",
+      "XXX-XX-6789",
+      "a***@example.com"
+    ]
+  },
+  {
+    "test_name": "P7.2 Computed Expression Sensitivity (salary + 1000 AS adjusted_salary)",
+    "phase": "Advanced Masking",
+    "expected": "Calculated financial field classified and masked as [CONFIDENTIAL] for Support",
+    "actual": "HTTP 200, row=['[CONFIDENTIAL]']",
+    "status": "PASS",
+    "evidence": [
+      "[CONFIDENTIAL]"
+    ]
+  },
+  {
+    "test_name": "P7.3 Safe Bounded Cursor Limits (max_rows=2)",
+    "phase": "Advanced Masking",
+    "expected": "Cursor fetches bounded rows (2) and sets truncated=True",
+    "actual": "HTTP 200, rows=2, truncated=True",
+    "status": "PASS",
+    "evidence": {
+      "role_applied": "Admin",
+      "auth_source": "jwt_verified",
+      "mask_strategy": "redact",
+      "rows_returned": 2,
+      "execution_ms": 5.7,
+      "truncated": true
+    }
+  },
+  {
+    "test_name": "P7.4 Empty Result Set (WHERE id = 99999)",
+    "phase": "Advanced Masking",
+    "expected": "HTTP 200, returns empty rows array without server errors",
+    "actual": "HTTP 200, rows=0, columns=['name', 'card_number']",
+    "status": "PASS",
+    "evidence": {
+      "columns": [
+        "name",
+        "card_number"
+      ],
+      "rows": [],
+      "meta": {
+        "role_applied": "Support",
+        "auth_source": "jwt_verified",
+        "mask_strategy": "redact",
+        "rows_returned": 0,
+        "execution_ms": 3.35,
+        "truncated": false
+      }
+    }
+  },
+  {
+    "test_name": "P8.1 Background Scan Initiation",
+    "phase": "Background Scanner",
+    "expected": "HTTP 200, returns task_id, status: scanning",
+    "actual": "HTTP 200, task: scan_1793368790, status: scanning",
+    "status": "PASS",
+    "evidence": {
+      "task_id": "scan_1793368790",
+      "status": "scanning",
+      "message": "Background scan initiated for 'all tables'."
+    }
+  },
+  {
+    "test_name": "P8.2 Background Scan Progress Tracking",
+    "phase": "Background Scanner",
+    "expected": "HTTP 200, progress percentage reported, status scanning/completed",
+    "actual": "HTTP 200, status: completed, progress: 100%",
+    "status": "PASS",
+    "evidence": {
+      "task_id": "scan_1793368790",
+      "status": "completed",
+      "target_table": "all",
+      "sample_limit": 10,
+      "progress_pct": 100,
+      "started_at": "2026-10-30T13:59:50.737464+00:00",
+      "completed_at": "2026-10-30T13:59:50.768037+00:00",
+      "tables_total": 1,
+      "tables_scanned": 1,
+      "columns_classified": 8,
+      "findings": [
+        {
+          "table": "customers",
+          "columns_count": 8,
+          "sensitive_count": 7
+        }
+      ],
+      "error": null
+    }
+  },
+  {
+    "test_name": "P8.3 Background Scan History Log",
+    "phase": "Background Scanner",
+    "expected": "HTTP 200, returns history array with past scan task records",
+    "actual": "HTTP 200, history_count: 3",
+    "status": "PASS",
+    "evidence": {
+      "recent_task": {
+        "task_id": "scan_1793367344",
+        "status": "completed",
+        "target_table": "customers",
+        "sample_limit": 10,
+        "progress_pct": 100,
+        "started_at": "2026-10-30T13:35:44.366814+00:00",
+        "completed_at": "2026-10-30T13:35:44.380823+00:00",
+        "tables_total": 1,
+        "tables_scanned": 1,
+        "columns_classified": 8,
+        "findings": [
+          {
+            "table": "customers",
+            "columns_count": 8,
+            "sensitive_count": 7
+          }
+        ],
+        "error": null
+      }
+    }
+  },
+  {
+    "test_name": "P8.4 Invalid Table Name Rejection in Scanner",
+    "phase": "Background Scanner",
+    "expected": "HTTP 400 Bad Request when table does not exist",
+    "actual": "HTTP 400, detail: Table 'non_existent_table_abc' does not exist in database. Available: customers",
+    "status": "PASS",
+    "evidence": {
+      "detail": "Table 'non_existent_table_abc' does not exist in database. Available: customers"
+    }
+  },
+  {
+    "test_name": "P9.1 SQLite Immutability & Record Preservation",
+    "phase": "Database Integrity",
+    "expected": "Customer count identical (4 == 4), raw data values 100% unchanged after all write attacks",
+    "actual": "Pre count: 4, Post count: 4, Identical: True",
+    "status": "PASS",
+    "evidence": {
+      "pre_count": 4,
+      "post_count": 4
+    }
+  },
+  {
+    "test_name": "P10.1 Offline Autonomous Execution (Zero CDN / Zero Cloud)",
+    "phase": "Offline Prototype",
+    "expected": "index.html & styles.css free of external CDN/fonts; all styles bundled locally",
+    "actual": "Remote fonts: False, External CDNs: False, Remote CSS: False",
+    "status": "PASS",
+    "evidence": {
+      "offline_ready": true
+    }
+  },
+  {
+    "test_name": "P11.1 Concurrency & Stress Stability (20 consecutive queries)",
+    "phase": "Performance & Stability",
+    "expected": "Average query latency < 50ms, zero crashes or 500 errors",
+    "actual": "Avg Latency: 5.90ms, P95: 8.49ms, Min: 4.48ms, Max: 8.49ms",
+    "status": "PASS",
+    "evidence": {
+      "avg_ms": 5.90424002148211,
+      "p95_ms": 8.492199936881661,
+      "samples": 20
+    }
+  }
+]
